@@ -1,6 +1,7 @@
-// The app: sign-in, routing (#/day/YYYY-MM-DD, #/library, #/settings) and paper actions.
+// The app: sign-in, routing and paper actions.
+// Routes: #/day/YYYY-MM-DD (Today), #/browse, #/paper/{doi_key}, #/library, #/settings.
 // The page shell (index.html) has a fixed top bar, a scrolling content area, a fixed tab bar,
-// a bottom sheet for notes and a toast for short messages.
+// bottom sheets (notes, calendar), a calendar window for wide screens and a toast.
 
 import * as data from "./data.js";
 import * as view from "./render.js";
@@ -9,23 +10,35 @@ import { DEFAULT_FIELDS, STATUSES } from "./labels.js";
 const content = document.getElementById("content");
 const appbar = document.getElementById("appbar");
 const tabbar = document.getElementById("tabbar");
-const sheet = document.getElementById("note-sheet");
+const noteSheet = document.getElementById("note-sheet");
+const calSheet = document.getElementById("cal-sheet");
+const calPop = document.getElementById("cal-pop");
+const calSide = document.getElementById("cal-side");
 const backdrop = document.getElementById("sheet-backdrop");
 const EMAIL_KEY = "paper-digest.email";
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const wideScreen = matchMedia("(min-width: 700px)");       // calendar opens as a window
+const sidebarScreen = matchMedia("(min-width: 1100px)");   // calendar stays on the left
+const STALE_MS = 10 * 60 * 1000;   // reload the calendar and index after 10 minutes
+const PAGE_SIZE = 150;             // search results shown at a time
 
 const state = {
   user: null,
-  days: [],                  // dates with a day document, ascending
+  calendar: null,            // { days: {date: {papers, highlights}}, dates: [...], loadedAt }
+  index: null,               // { meta, entries, journals, loadedAt }
   library: new Map(),        // doi_key → library document (live)
   requests: new Map(),       // request ID → request document (live)
   papers: new Map(),         // doi_key → paper document (cache)
   authors: new Map(),        // OpenAlex author ID → author document (cache)
   busy: new Set(),           // doi_keys with a request being created
   optimistic: new Map(),     // doi_key → library entry shown until the write is confirmed
-  page: null,                // "login" | "day" | "library" | "settings"
+  page: null,                // "login" | "day" | "browse" | "paper" | "library" | "settings"
+  day: null,                 // the date shown on the day page
+  calMonth: null,            // "YYYY-MM" shown in the calendar
+  browse: { q: "", journal: "", field: "", limit: PAGE_SIZE, scroll: 0 },
   librarySignature: "",
   navigation: 0,             // increases on every page change; stale loads are dropped
+  previousHash: "",
   noteKey: null,             // paper the note sheet is for
   unsubscribe: [],
 };
@@ -56,6 +69,10 @@ function errorText(err) {
   return err?.message || String(err);
 }
 
+const today = () => new Date().toLocaleDateString("en-CA");   // YYYY-MM-DD on this device
+const fresh = (loaded) => loaded && Date.now() - loaded.loadedAt < STALE_MS;
+const motion = () => (reducedMotion.matches ? "auto" : "smooth");
+
 function stateOf(key) {
   return {
     entry: state.optimistic.get(key) || state.library.get(key),
@@ -65,26 +82,27 @@ function stateOf(key) {
 }
 
 // Show a page: top bar, content (with a short entrance animation) and the active tab
-function show(page, bar, html, { keepScroll = false } = {}) {
+function show(tab, bar, html, { keepScroll = false, scrollTo = 0 } = {}) {
   appbar.innerHTML = view.appBar(bar);
   const y = content.scrollTop;
   content.innerHTML = html;
   if (keepScroll) {
     content.scrollTop = y;
   } else {
-    content.scrollTop = 0;
+    content.scrollTop = scrollTo;
     content.classList.remove("enter");
     void content.offsetWidth;   // restart the animation
     content.classList.add("enter");
   }
-  for (const tab of tabbar.querySelectorAll("[data-tab]")) {
-    if (tab.dataset.tab === page) tab.setAttribute("aria-current", "page");
-    else tab.removeAttribute("aria-current");
+  for (const el of tabbar.querySelectorAll("[data-tab]")) {
+    if (el.dataset.tab === tab) el.setAttribute("aria-current", "page");
+    else el.removeAttribute("aria-current");
   }
+  document.body.classList.toggle("page-day", state.page === "day");
 }
 
-function showLoading(page, bar) {
-  show(page, bar, view.skeleton());
+function showLoading(tab, bar) {
+  show(tab, bar, view.skeleton());
 }
 
 // ---------- Sign-in ----------
@@ -92,6 +110,7 @@ function showLoading(page, bar) {
 function showLogin(message = "") {
   state.page = "login";
   document.body.classList.add("signed-out");
+  document.body.classList.remove("page-day");
   appbar.innerHTML = "";
   content.innerHTML = view.loginPage(storage.get(EMAIL_KEY), message);
   const form = content.querySelector("#login-form");
@@ -146,25 +165,47 @@ function endSession() {
   state.requests = new Map();
   state.papers.clear();
   state.authors.clear();
-  state.days = [];
-  closeSheet();
+  state.calendar = null;
+  state.index = null;
+  closePanels();
+  calSide.innerHTML = "";
 }
 
 // ---------- Routing ----------
 
+let currentHash = "";
 function route() {
   if (!state.user) return;
+  state.previousHash = currentHash;
+  currentHash = location.hash;
   state.navigation += 1;
-  closeSheet();
+  closePanels();
   const hash = location.hash;
   const day = hash.match(/^#\/day\/(\d{4}-\d{2}-\d{2})$/);
+  const paper = hash.match(/^#\/paper\/(.+)$/);
+  if (state.page === "browse") state.browse.scroll = content.scrollTop;
   if (day) showDay(day[1]);
+  else if (paper) showPaper(paper[1]);
+  else if (hash === "#/browse") showBrowse();
   else if (hash === "#/library") showLibrary();
   else if (hash === "#/settings") showSettings();
   else showDay(null);
 }
 
 window.addEventListener("hashchange", route);
+
+// ---------- Calendar data (meta/calendar, one read) ----------
+
+async function ensureCalendar(force = false) {
+  if (!force && fresh(state.calendar)) return state.calendar;
+  let days = (await data.getMeta("calendar"))?.days;
+  if (!days) {
+    // Older data without meta/calendar: the day IDs, without counts
+    days = Object.fromEntries((await data.dayIds()).map((d) => [d, { papers: 0, highlights: 0 }]));
+  }
+  state.calendar = { days, dates: Object.keys(days).sort(), loadedAt: Date.now() };
+  return state.calendar;
+}
 
 // ---------- Day page ----------
 
@@ -173,19 +214,19 @@ async function showDay(date) {
   state.page = "day";
   showLoading("today", { date: date || "" });
   try {
-    if (!date || !state.days.length) state.days = await data.dayIds();
-    if (!date) date = state.days.at(-1);
+    const cal = await ensureCalendar(!date);   // the latest day: check for a new digest
+    if (!date) date = cal.dates.at(-1);
     if (navigation !== state.navigation) return;
+    state.day = date || null;
+    renderSide();
     if (!date) {
       show("today", { date: "" }, '<p class="empty">No digest yet.</p>');
       return;
     }
     const bar = {
       date,
-      prev: state.days.filter((d) => d < date).at(-1),
-      next: state.days.find((d) => d > date),
-      min: state.days[0],
-      max: state.days.at(-1),
+      prev: cal.dates.filter((d) => d < date).at(-1),
+      next: cal.dates.find((d) => d > date),
     };
     appbar.innerHTML = view.appBar(bar);
     const day = await data.getDay(date);
@@ -202,6 +243,199 @@ async function showDay(date) {
   } catch (err) {
     if (navigation === state.navigation) {
       show("today", { date: date || "" }, `<p class="empty">Could not load the digest. ${view.e(errorText(err))}</p>`);
+    }
+  }
+}
+
+// ---------- Calendar (sheet on phones, window on wider screens, sidebar on wide ones) ----------
+
+function calendarHtml() {
+  const month = state.calMonth || (state.day || today()).slice(0, 7);
+  return view.calendar(month, state.calendar?.days || {}, state.day, today());
+}
+
+function renderSide() {
+  calSide.innerHTML = state.calendar ? calendarHtml() : "";
+}
+
+async function openCalendar() {
+  if (!state.calendar) await ensureCalendar().catch(() => null);
+  state.calMonth = (state.day || today()).slice(0, 7);
+  if (sidebarScreen.matches && state.page === "day") {
+    renderSide();
+    calSide.querySelector(".cal-day.selected, .cal-day.today")?.focus?.();
+    return;
+  }
+  closePanels();
+  if (wideScreen.matches) {
+    calPop.innerHTML = calendarHtml();
+    calPop.hidden = false;
+    requestAnimationFrame(() => calPop.classList.add("open"));
+    calPop.querySelector("[data-date].selected, [data-cal='today']")?.focus();
+  } else {
+    calSheet.innerHTML = '<div class="sheet-grip" aria-hidden="true"></div>' + calendarHtml();
+    openSheet(calSheet);
+  }
+}
+
+function moveMonth(step) {
+  const [y, m] = (state.calMonth || today().slice(0, 7)).split("-").map(Number);
+  const d = new Date(y, m - 1 + step, 1);
+  state.calMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// Clicks inside any calendar container
+function onCalendarClick(ev) {
+  const container = ev.currentTarget;
+  const control = ev.target.closest("[data-cal]");
+  const day = ev.target.closest("[data-date]");
+  if (control) {
+    const what = control.dataset.cal;
+    if (what === "prev") moveMonth(-1);
+    if (what === "next") moveMonth(1);
+    if (what === "today") {
+      state.calMonth = today().slice(0, 7);
+      if (state.calendar?.days[today()]) {
+        location.hash = `#/day/${today()}`;
+        return;
+      }
+    }
+    const grip = container === calSheet ? '<div class="sheet-grip" aria-hidden="true"></div>' : "";
+    container.innerHTML = grip + calendarHtml();
+  } else if (day) {
+    closePanels();
+    location.hash = `#/day/${day.dataset.date}`;
+  }
+}
+for (const el of [calSheet, calPop, calSide]) el.addEventListener("click", onCalendarClick);
+
+// A sheet or window opened for one screen width is closed when the width changes
+wideScreen.addEventListener("change", closePanels);
+sidebarScreen.addEventListener("change", () => { closePanels(); renderSide(); });
+
+// Clicking outside the calendar window closes it
+document.addEventListener("click", (ev) => {
+  if (!calPop.hidden && !calPop.contains(ev.target) && !ev.target.closest('[data-act="calendar"]')) closePanels();
+});
+
+// ---------- Browse (paper index: meta/index + index/{shard}) ----------
+
+async function ensureIndex(force = false) {
+  if (!force && fresh(state.index)) return state.index;
+  const meta = (await data.getMeta("index")) || { shards: {}, journals: {}, fields: [] };
+  const ids = Object.values(meta.shards || {}).flat();
+  const shards = await Promise.all(ids.map((id) => data.getIndexShard(id)));
+  const byKey = new Map();
+  for (const entry of shards.flat()) byKey.set(entry.doi_key, entry);
+  const names = meta.journals || {};
+  const counts = new Map();
+  const entries = [...byKey.values()].map((x) => {
+    counts.set(x.journal_abbr, (counts.get(x.journal_abbr) || 0) + 1);
+    return {
+      ...x,
+      // what search looks at: title, authors, journal, one-liner, topic tags (lower case)
+      hay: [x.title, ...(x.authors || []), x.journal_abbr, names[x.journal_abbr], x.one_liner,
+        ...(x.topic_tags || [])].filter(Boolean).join("\n").toLowerCase(),
+      sortKey: `${x.published_date || ""}|${(x.appeared_in || [""])[0]}`,
+    };
+  }).sort((a, b) => b.sortKey.localeCompare(a.sortKey));
+  const journals = [...counts].filter(([abbr]) => abbr)
+    .map(([abbr, count]) => ({ abbr, name: names[abbr] || abbr, count }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  state.index = { meta, entries, journals, loadedAt: Date.now() };
+  return state.index;
+}
+
+async function showBrowse() {
+  const navigation = state.navigation;
+  const returning = state.previousHash.startsWith("#/paper/");
+  state.page = "browse";
+  document.title = "Browse";
+  showLoading("browse", { title: "Browse" });
+  try {
+    const index = await ensureIndex();
+    if (navigation !== state.navigation) return;
+    show("browse", { title: "Browse" },
+      view.browseBar(index.meta, index.journals, state.browse) + '<div id="browse-list"></div>',
+      { scrollTo: 0 });
+    if (!returning) state.browse.limit = PAGE_SIZE;
+    renderBrowseList();
+    if (returning) content.scrollTop = state.browse.scroll;
+  } catch (err) {
+    if (navigation === state.navigation) {
+      show("browse", { title: "Browse" }, `<p class="empty">Could not load the paper index. ${view.e(errorText(err))}</p>`);
+    }
+  }
+}
+
+function browseMatches() {
+  const { q, journal, field } = state.browse;
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  return state.index.entries.filter((x) => (!journal || x.journal_abbr === journal)
+    && (!field || (x.field || "other") === field)
+    && words.every((w) => x.hay.includes(w)));
+}
+
+function renderBrowseList() {
+  const list = document.getElementById("browse-list");
+  if (!list || !state.index) return;
+  const { q, journal, field, limit } = state.browse;
+  if (!q.trim() && !journal && !field) {
+    list.innerHTML = view.journalList(state.index.journals);
+    return;
+  }
+  const matches = browseMatches();
+  const shown = matches.slice(0, limit);
+  const isSaved = (key) => Boolean(stateOf(key).entry?.saved);
+  list.innerHTML = view.resultRows(shown, matches.length, state.index.meta.highlight_threshold ?? 7, isSaved,
+    Math.min(PAGE_SIZE, matches.length - shown.length));
+}
+
+// Typing filters as you go (redrawn once per frame)
+let browseFrame = 0;
+content.addEventListener("input", (ev) => {
+  if (state.page !== "browse" || ev.target.name !== "q") return;
+  state.browse.q = ev.target.value;
+  state.browse.limit = PAGE_SIZE;
+  cancelAnimationFrame(browseFrame);
+  browseFrame = requestAnimationFrame(renderBrowseList);
+});
+
+content.addEventListener("change", (ev) => {
+  if (state.page !== "browse" || !["journal", "field"].includes(ev.target.name)) return;
+  state.browse[ev.target.name] = ev.target.value;
+  state.browse.limit = PAGE_SIZE;
+  renderBrowseList();
+});
+
+// The search box: Enter / Search closes the keyboard
+content.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && ev.target.name === "q") ev.target.blur();
+});
+
+// ---------- One paper (from Browse) ----------
+
+async function showPaper(key) {
+  const navigation = state.navigation;
+  state.page = "paper";
+  const bar = { title: "Paper", back: state.previousHash.startsWith("#/day/") ? "Digest" : "Browse" };
+  showLoading("browse", bar);
+  try {
+    const [paper] = await data.getMany("papers", [key], state.papers);
+    const index = await ensureIndex().catch(() => null);
+    if (navigation !== state.navigation) return;
+    if (!paper) {
+      show("browse", bar, '<p class="empty">This paper is not in the database.</p>');
+      return;
+    }
+    const meta = index?.meta || {};
+    const fieldList = meta.fields?.length ? meta.fields : DEFAULT_FIELDS;
+    const ctx = { highlight_threshold: meta.highlight_threshold ?? 7, languages: meta.languages || {} };
+    show("browse", bar, view.paperPage(paper, ctx, new Map(fieldList.map((f) => [f.id, f.name])), stateOf(key)));
+    document.title = paper.title || "Paper";
+  } catch (err) {
+    if (navigation === state.navigation) {
+      show("browse", bar, `<p class="empty">Could not load the paper. ${view.e(errorText(err))}</p>`);
     }
   }
 }
@@ -266,7 +500,15 @@ async function onLiveChange() {
       return;
     }
   }
-  if (state.page === "day" || state.page === "library") refreshCards();
+  if (["day", "library", "paper"].includes(state.page)) refreshCards();
+  if (state.page === "browse") refreshMarks();
+}
+
+// Saved marks in the Browse list
+function refreshMarks() {
+  for (const mark of content.querySelectorAll("[data-mark]")) {
+    mark.innerHTML = stateOf(mark.dataset.mark).entry?.saved ? view.ICONS.bookmarkFilled : "";
+  }
 }
 
 // Replace only the parts of each card that depend on library and requests
@@ -311,8 +553,6 @@ async function withOptimistic(key, change, write) {
   }
 }
 
-const today = () => new Date().toLocaleDateString("en-CA");   // YYYY-MM-DD
-
 async function act(button, card) {
   const key = card.dataset.key;
   const paper = state.papers.get(key);
@@ -332,7 +572,7 @@ async function act(button, card) {
       await withOptimistic(key, (e) => ({ saved: true, saved_at: e.saved_at || today(), status }),
         () => data.setStatus(paper, status));
     } else if (what === "note") {
-      openSheet(paper);
+      openNote(paper);
     } else if (what === "request") {
       const request = view.latestRequest(key, state.requests);
       if (state.busy.has(key) || ["pending", "processing"].includes(request?.status) || state.library.get(key)?.fulltext) return;
@@ -355,10 +595,25 @@ content.addEventListener("click", (ev) => {
   const jump = ev.target.closest("[data-jump]");
   if (jump) {
     ev.preventDefault();
-    document.getElementById(jump.dataset.jump)?.scrollIntoView({ behavior: reducedMotion.matches ? "auto" : "smooth" });
+    document.getElementById(jump.dataset.jump)?.scrollIntoView({ behavior: motion() });
+    return;
+  }
+  const journal = ev.target.closest("[data-journal]");
+  if (journal) {
+    state.browse.journal = journal.dataset.journal;
+    state.browse.limit = PAGE_SIZE;
+    const select = content.querySelector('select[name="journal"]');
+    if (select) select.value = state.browse.journal;
+    renderBrowseList();
+    content.scrollTo({ top: 0 });
     return;
   }
   const button = ev.target.closest("button[data-act]");
+  if (button?.dataset.act === "more") {
+    state.browse.limit += PAGE_SIZE;
+    renderBrowseList();
+    return;
+  }
   const card = button?.closest("article.paper[data-key]");
   if (button && card) act(button, card);
   if (button?.dataset.act === "signout") {
@@ -367,18 +622,24 @@ content.addEventListener("click", (ev) => {
   }
 });
 
-appbar.addEventListener("change", (ev) => {
-  if (ev.target.matches('input[type="date"]') && ev.target.value) {
-    location.hash = `#/day/${ev.target.value}`;
+appbar.addEventListener("click", (ev) => {
+  const button = ev.target.closest("[data-act]");
+  if (button?.dataset.act === "calendar") {
+    if (!calPop.hidden) closePanels();
+    else openCalendar();
+  }
+  if (button?.dataset.act === "back") {
+    if (state.previousHash && state.previousHash !== currentHash) history.back();
+    else location.hash = "#/browse";
   }
 });
 
-// Tapping the active Today tab on the latest day scrolls back to the top
+// Tapping the active tab again scrolls back to the top
 tabbar.addEventListener("click", (ev) => {
   const tab = ev.target.closest("[data-tab]");
   if (tab?.getAttribute("aria-current") === "page" && location.hash === tab.getAttribute("href")) {
     ev.preventDefault();
-    content.scrollTo({ top: 0, behavior: reducedMotion.matches ? "auto" : "smooth" });
+    content.scrollTo({ top: 0, behavior: motion() });
   }
 });
 
@@ -399,56 +660,68 @@ content.addEventListener("toggle", (ev) => {
   if (ev.target.matches?.("details[data-authors]") && ev.target.open) loadAuthors(ev.target);
 }, true);
 
-// ---------- Note sheet ----------
+// ---------- Sheets and the calendar window ----------
 
-function openSheet(paper) {
-  state.noteKey = paper.doi_key;
-  sheet.querySelector(".sheet-paper").textContent = paper.title || paper.doi || "";
-  sheet.hidden = false;
+function openSheet(el) {
+  el.hidden = false;
   backdrop.hidden = false;
   requestAnimationFrame(() => {
-    sheet.classList.add("open");
+    el.classList.add("open");
     backdrop.classList.add("open");
-    sheet.elements.text.focus();
   });
 }
 
-function closeSheet() {
-  if (sheet.hidden) return;
+function closePanels() {
   state.noteKey = null;
-  sheet.classList.remove("open");
+  for (const el of [noteSheet, calSheet, calPop]) {
+    if (el.hidden) continue;
+    el.classList.remove("open");
+    const hide = () => { if (!el.classList.contains("open")) el.hidden = true; };
+    if (reducedMotion.matches || el === calPop) hide();
+    else setTimeout(hide, 250);
+  }
   backdrop.classList.remove("open");
-  const hide = () => { if (!state.noteKey) { sheet.hidden = true; backdrop.hidden = true; } };
-  if (reducedMotion.matches) hide();
-  else setTimeout(hide, 250);
+  const hideBackdrop = () => { if (!backdrop.classList.contains("open")) backdrop.hidden = true; };
+  if (reducedMotion.matches) hideBackdrop();
+  else setTimeout(hideBackdrop, 250);
 }
 
-sheet.addEventListener("submit", async (ev) => {
+backdrop.addEventListener("click", closePanels);
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") closePanels();
+  // ⌘/Ctrl + Enter adds the note
+  if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey) && !noteSheet.hidden) noteSheet.requestSubmit();
+});
+
+// ---------- Note sheet ----------
+
+function openNote(paper) {
+  state.noteKey = paper.doi_key;
+  noteSheet.querySelector(".sheet-paper").textContent = paper.title || paper.doi || "";
+  openSheet(noteSheet);
+  requestAnimationFrame(() => noteSheet.elements.text.focus());
+}
+
+noteSheet.addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  const text = sheet.elements.text.value.trim();
+  const text = noteSheet.elements.text.value.trim();
   const paper = state.papers.get(state.noteKey);
   if (!text || !paper) return;
-  sheet.elements.text.value = "";
-  closeSheet();
+  noteSheet.elements.text.value = "";
+  closePanels();
   toast("Note added");
   try {
     await withOptimistic(paper.doi_key, (e) => ({ notes: [...(e.notes || []), { at: data.isoNow(), text }] }),
       () => data.addNote(paper, text));
   } catch (err) {
     toast(`Could not save the note: ${errorText(err)}`, "error");
-    openSheet(paper);
-    sheet.elements.text.value = text;   // give the text back
+    openNote(paper);
+    noteSheet.elements.text.value = text;   // give the text back
   }
 });
 
-sheet.addEventListener("click", (ev) => {
-  if (ev.target.closest('[data-act="sheet-cancel"]')) closeSheet();
-});
-backdrop.addEventListener("click", closeSheet);
-document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") closeSheet();
-  // ⌘/Ctrl + Enter adds the note
-  if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey) && !sheet.hidden) sheet.requestSubmit();
+noteSheet.addEventListener("click", (ev) => {
+  if (ev.target.closest('[data-act="sheet-cancel"]')) closePanels();
 });
 
 // ---------- Settings ----------
@@ -485,6 +758,13 @@ function showSettings() {
 }
 
 // ---------- Start ----------
+
+// Coming back to the app after a while: the next page load re-reads the calendar and index
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.calendar && !fresh(state.calendar) && state.page === "day") {
+    ensureCalendar(true).then(renderSide).catch(() => {});
+  }
+});
 
 data.watchUser((user) => {
   if (user) {

@@ -1,7 +1,8 @@
 # paper-digest-app
 
 A small web app for reading the paper-digest data on a phone: each morning's new papers,
-grouped by field, plus a personal library of saved papers with full-text summaries.
+grouped by field, a calendar of past digests, a searchable list of all past papers (Browse),
+and a personal library of saved papers with full-text summaries.
 
 Live at <https://yasukikudo.com/paper-digest-app/> (GitHub Pages). Only the owner's account can
 sign in and read data; this repository holds no data, only the page code.
@@ -13,7 +14,15 @@ sign in and read data; this repository holds no data, only the page code.
 - **Data** lives in Cloud Firestore in the Firebase project `paper-digest-a68d0`. A scheduled
   job in a separate private repository writes the papers every morning and processes full-text
   requests a few times a day. The data formats are described in that repository's `schema.md`.
-- **The app reads** `days`, `papers`, `library`, `authors` and `requests`, and **writes** only:
+- **The app reads** `days`, `papers`, `library`, `authors`, `requests` and three kinds of light
+  documents written by the morning run, so it never reads every day or paper:
+  - `meta/calendar` (one read per session): papers and highlights per day, for the calendar and
+    for previous / next day
+  - `meta/index` and the `index/{shard}` documents it lists (read when Browse is first opened):
+    a short entry per paper (title, authors, journal, dates, field, relevance, one-liner, tags,
+    full-text access). Browse lists and searches these in the browser; a paper's full document
+    is read from `papers` only when it is opened
+  Both are re-read after 10 minutes. **It writes** only:
   - `library/{doi_key}`: save / unsave, status (to read, read), notes. A missing document is
     created in the full schema shape; existing documents get only changed fields, and notes are
     added with `arrayUnion`, inside a transaction (the scripts write the same documents).
@@ -27,8 +36,13 @@ sign in and read data; this repository holds no data, only the page code.
   change at once and replaces it with the stored document when the write finishes, or undoes it
   if the write fails.
 - **Layout:** a fixed top bar (date with previous / next, or the page title), one scrolling
-  content area and a fixed tab bar (Today, Library, Settings), with safe-area padding for
-  iPhone notches. Notes are added in a bottom sheet; short messages appear as a toast.
+  content area and a fixed tab bar (Today, Browse, Library, Settings), with safe-area padding for
+  iPhone notches. Tapping the date opens a month calendar (dots on days with papers, a
+  different color for days with highlights): a bottom sheet on phones, a small window from
+  700 px, and always shown on the left of a day page from 1100 px.
+- **Browse:** with nothing entered, the journals and their paper counts; a journal, a field
+  and/or search words (case-insensitive, all words must match, filtered as you type) list
+  papers newest first, 150 at a time. Notes are added in a bottom sheet; short messages appear as a toast.
   Animations stop when the device asks for reduced motion. Icons are inline SVG.
 - Field names come from each day document (`days.fields`); days written before that field
   existed use `DEFAULT_FIELDS` in `js/labels.js`.
@@ -53,7 +67,8 @@ js/firebase-config.js    Firebase web configuration
 js/labels.js             labels not stored in Firestore (default field names, summary sections, ...)
 js/data.js               sign-in, Firestore reads, live updates and writes
 js/render.js             HTML for pages and paper cards
-js/app.js                routing (#/day/YYYY-MM-DD, #/library, #/settings) and actions
+js/app.js                routing (#/day/YYYY-MM-DD, #/browse, #/paper/{doi_key}, #/library, #/settings),
+                         calendar, Browse and actions
 .nojekyll                serve files as they are on GitHub Pages
 ```
 
@@ -70,7 +85,8 @@ js/app.js                routing (#/day/YYYY-MM-DD, #/library, #/settings) and a
 3. To update the Firebase SDK, change the version in the three import URLs in `js/data.js`.
 
 If the data format changes (`schema.md` in the private repository), update `js/data.js`
-(`SCHEMA_VERSION`, `newEntry`, the request shape) and `js/render.js`.
+(`SCHEMA_VERSION`, `newEntry`, the request shape), `js/render.js` and, for the index entries,
+`ensureIndex` in `js/app.js`.
 
 ## Firebase settings
 

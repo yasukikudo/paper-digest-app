@@ -158,6 +158,8 @@ export const ICONS = {
   alert: svg('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.2v.3"/>'),
   chevronLeft: svg('<path d="M14.5 5.5L8 12l6.5 6.5"/>'),
   chevronRight: svg('<path d="M9.5 5.5L16 12l-6.5 6.5"/>'),
+  chevronDown: svg('<path d="M6.5 9.5L12 15l5.5-5.5"/>'),
+  search: svg('<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5l5 5"/>'),
 };
 
 // Buttons and request state under a paper
@@ -261,21 +263,66 @@ function weekday(date) {
   return WEEKDAYS[new Date(y, m - 1, d).getDay()];
 }
 
-// On a day: ‹ date › (the date opens a date picker). Elsewhere: the page title.
-export function appBar({ title, date, prev, next, min, max }) {
-  if (date === undefined) return `<div class="appbar-inner"><h1 class="appbar-title">${e(title)}</h1></div>`;
+// On a day: ‹ date › (the date opens the calendar). Elsewhere: the page title, with a back
+// button on detail pages.
+export function appBar({ title, date, prev, next, back }) {
+  if (date === undefined) {
+    return '<div class="appbar-inner">'
+      + (back ? `<button type="button" class="appbar-back" data-act="back">${ICONS.chevronLeft}<span>${e(back)}</span></button>` : "")
+      + `<h1 class="appbar-title">${e(title)}</h1>`
+      + (back ? '<span class="appbar-spacer"></span>' : "")
+      + "</div>";
+  }
   const arrow = (target, label, icon) => (target
     ? `<a class="appbar-btn" href="#/day/${target}" aria-label="${label}">${icon}</a>`
     : `<span class="appbar-btn off" aria-hidden="true">${icon}</span>`);
   return '<div class="appbar-inner">'
     + arrow(prev, "Previous day", ICONS.chevronLeft)
-    + '<label class="date-pick">'
-    + `<span class="date-main">${e(date || "No digest")}</span>`
+    + '<button type="button" class="date-pick" data-act="calendar" aria-haspopup="dialog" aria-label="Open the calendar">'
+    + `<span class="date-main">${e(date || "No digest")}${ICONS.chevronDown}</span>`
     + (date ? `<span class="date-sub">${weekday(date)}</span>` : "")
-    + `<input type="date" value="${e(date || "")}" min="${e(min || "")}" max="${e(max || "")}" aria-label="Open a date">`
-    + "</label>"
+    + "</button>"
     + arrow(next, "Next day", ICONS.chevronRight)
     + "</div>";
+}
+
+// ---------- Calendar ----------
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August",
+  "September", "October", "November", "December"];
+
+// A month grid. `days` is meta/calendar.days ({date: {papers, highlights}});
+// `month` is "YYYY-MM"; `selected` the open day; `today` the device's date.
+export function calendar(month, days, selected, today) {
+  const [y, m] = month.split("-").map(Number);
+  const first = new Date(y, m - 1, 1).getDay();
+  const count = new Date(y, m, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < first; i++) cells.push('<span class="cal-day blank"></span>');
+  for (let d = 1; d <= count; d++) {
+    const date = `${month}-${String(d).padStart(2, "0")}`;
+    const info = days[date];
+    const cls = ["cal-day", info ? "has" : "", info?.highlights ? "hl" : "",
+      date === today ? "today" : "", date === selected ? "selected" : ""].filter(Boolean).join(" ");
+    const label = `${MONTHS[m - 1]} ${d}`
+      + (info ? `: ${plural(info.papers, "paper")}${info.highlights ? `, ${plural(info.highlights, "highlight")}` : ""}` : ": no digest")
+      + (date === today ? " (today)" : "");
+    cells.push(info
+      ? `<button type="button" class="${cls}" data-date="${date}" aria-label="${e(label)}"${date === selected ? ' aria-current="date"' : ""}><span>${d}</span><i class="dot"></i></button>`
+      : `<span class="${cls}" aria-label="${e(label)}"><span>${d}</span></span>`);
+  }
+  const weekdays = ["S", "M", "T", "W", "T", "F", "S"].map((w) => `<span class="cal-wd" aria-hidden="true">${w}</span>`).join("");
+  return '<div class="cal">'
+    + '<div class="cal-head">'
+    + `<button type="button" class="appbar-btn" data-cal="prev" aria-label="Previous month">${ICONS.chevronLeft}</button>`
+    + `<span class="cal-title" aria-live="polite">${MONTHS[m - 1]} ${y}</span>`
+    + `<button type="button" class="appbar-btn" data-cal="next" aria-label="Next month">${ICONS.chevronRight}</button>`
+    + "</div>"
+    + `<div class="cal-grid">${weekdays}${cells.join("")}</div>`
+    + '<div class="cal-foot">'
+    + '<span class="cal-legend"><i class="dot"></i>New papers <i class="dot hl"></i>Highlights</span>'
+    + '<button type="button" class="btn" data-cal="today">Today</button>'
+    + "</div></div>";
 }
 
 // ---------- Pages ----------
@@ -349,4 +396,61 @@ export function settingsPage(email) {
     + '<div class="inset signout"><button type="button" class="row danger" data-act="signout">Sign out</button></div>'
     + '<p class="hint">After signing out, this device remembers the email; you will only need the PIN.</p>'
     + "</section>";
+}
+
+// ---------- Browse ----------
+
+// Search box and filters (rendered once; the list below is redrawn as you type)
+export function browseBar(meta, journals, browse) {
+  const option = (value, label, selected) => `<option value="${e(value)}"${selected ? " selected" : ""}>${e(label)}</option>`;
+  return '<div class="browse-bar">'
+    + `<label class="search">${ICONS.search}<input type="search" name="q" value="${e(browse.q)}"`
+    + ' placeholder="Search titles, authors, journals, tags" autocomplete="off" autocorrect="off" spellcheck="false"'
+    + ' enterkeyhint="search" aria-label="Search papers"></label>'
+    + '<div class="filters">'
+    + `<span class="select">${'<select name="journal" aria-label="Journal">'}${option("", "All journals", !browse.journal)}`
+    + journals.map((j) => option(j.abbr, `${j.abbr} · ${j.name}`, browse.journal === j.abbr)).join("")
+    + `</select>${ICONS.chevronDown}</span>`
+    + `<span class="select"><select name="field" aria-label="Field">${option("", "All fields", !browse.field)}`
+    + (meta.fields || []).map((f) => option(f.id, f.name, browse.field === f.id)).join("")
+    + `</select>${ICONS.chevronDown}</span>`
+    + "</div></div>";
+}
+
+// No search and no filters: journals with their paper counts
+export function journalList(journals) {
+  if (!journals.length) return '<p class="empty">No papers yet.</p>';
+  return `<p class="list-head">${plural(journals.length, "journal")}</p><ul class="rows">`
+    + journals.map((j) => (
+      `<li><button type="button" class="row-btn" data-journal="${e(j.abbr)}">`
+      + `<span class="row-main"><span class="row-title">${e(j.name)}</span><span class="row-meta">${e(j.abbr)}</span></span>`
+      + `<span class="count">${j.count}</span>${ICONS.chevronRight}</button></li>`
+    )).join("") + "</ul>";
+}
+
+// Search results: one row per paper; `isSaved(key)` gives the saved mark
+export function resultRows(entries, total, threshold, isSaved, more) {
+  if (!total) return '<p class="empty">No matching papers.</p>';
+  const rows = entries.map((x) => {
+    const hl = (x.relevance ?? 0) >= threshold;
+    const meta = [x.journal_abbr, x.published_date, x.relevance !== null && x.relevance !== undefined ? `Relevance ${x.relevance}` : ""]
+      .filter(Boolean).join(" · ");
+    return `<li><a class="row-btn" href="#/paper/${e(x.doi_key)}" data-key="${e(x.doi_key)}">`
+      + '<span class="row-main">'
+      + `<span class="row-title serif">${e(x.title)}</span>`
+      + `<span class="row-meta">${hl ? '<i class="dot hl" aria-label="Highlight"></i>' : ""}${e(meta)}</span>`
+      + "</span>"
+      + `<span class="row-mark" data-mark="${e(x.doi_key)}">${isSaved(x.doi_key) ? ICONS.bookmarkFilled : ""}</span>`
+      + "</a></li>";
+  }).join("");
+  return `<p class="list-head">${plural(total, "paper")}</p><ul class="rows">${rows}</ul>`
+    + (more ? `<button type="button" class="btn wide more-btn" data-act="more">Show ${more} more</button>` : "");
+}
+
+// ---------- One paper (from Browse) ----------
+
+export function paperPage(p, ctx, fieldNames, state) {
+  const days = (p.appeared_in || []).map((d) => `<a href="#/day/${e(d)}">${e(d)}</a>`).join(", ");
+  return dayCard(p, ctx, fieldNames, state)
+    + (days ? `<p class="appeared">In the digest of ${days}</p>` : "");
 }

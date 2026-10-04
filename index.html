@@ -23,6 +23,9 @@
   <!-- Fixed top bar: date and previous / next on a day, the page title elsewhere -->
   <header class="appbar" id="appbar"></header>
 
+  <!-- Wide screens: the month calendar stays on the left of a day page -->
+  <aside class="cal-side" id="cal-side" aria-label="Calendar"></aside>
+
   <!-- The only scrolling area -->
   <main class="content" id="content">
     <div class="skeleton" aria-hidden="true"><div class="sk-card"></div><div class="sk-card"></div></div>
@@ -33,6 +36,10 @@
     <a href="#/" data-tab="today">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/><circle cx="12" cy="15" r="1.6" class="fill"/></svg>
       <span>Today</span>
+    </a>
+    <a href="#/browse" data-tab="browse">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5l5 5"/></svg>
+      <span>Browse</span>
     </a>
     <a href="#/library" data-tab="library">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4-6.5 4v-16a1 1 0 0 1 1-1z"/></svg>
@@ -56,6 +63,10 @@
       <button type="submit" class="btn primary">Add note</button>
     </div>
   </form>
+
+  <!-- Calendar: a bottom sheet on phones, a small window under the date on wider screens -->
+  <div class="sheet cal-sheet" id="cal-sheet" role="dialog" aria-modal="true" aria-label="Calendar" hidden></div>
+  <div class="cal-pop" id="cal-pop" role="dialog" aria-label="Calendar" hidden></div>
 
   <!-- Short messages ("Saved", "Requested") -->
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

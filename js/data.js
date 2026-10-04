@@ -13,7 +13,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);   // stays signed in on this device until sign-out
@@ -56,6 +56,18 @@ export async function dayIds() {
 export async function getDay(date) {
   const snap = await getDoc(doc(db, "days", date));
   return snap.exists() ? snap.data() : null;
+}
+
+// Light documents written by the morning run: meta/calendar, meta/index (null if missing)
+export async function getMeta(name) {
+  const snap = await getDoc(doc(db, "meta", name));
+  return snap.exists() ? snap.data() : null;
+}
+
+// One shard of the paper index (index/{id}): its entries, newest first
+export async function getIndexShard(id) {
+  const snap = await getDoc(doc(db, "index", id));
+  return snap.exists() ? snap.data().papers || [] : [];
 }
 
 // Fetch documents by ID, using and filling `cache` (a Map). Missing documents map to null.
