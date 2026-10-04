@@ -6,6 +6,7 @@
 import * as data from "./data.js";
 import * as view from "./render.js";
 import { DEFAULT_FIELDS, STATUSES } from "./labels.js";
+import * as schedule from "./schedule.js";
 
 const content = document.getElementById("content");
 const appbar = document.getElementById("appbar");
@@ -198,12 +199,13 @@ window.addEventListener("hashchange", route);
 
 async function ensureCalendar(force = false) {
   if (!force && fresh(state.calendar)) return state.calendar;
-  let days = (await data.getMeta("calendar"))?.days;
+  const meta = await data.getMeta("calendar");
+  let days = meta?.days;
   if (!days) {
     // Older data without meta/calendar: the day IDs, without counts
     days = Object.fromEntries((await data.dayIds()).map((d) => [d, { papers: 0, highlights: 0 }]));
   }
-  state.calendar = { days, dates: Object.keys(days).sort(), loadedAt: Date.now() };
+  state.calendar = { days, dates: Object.keys(days).sort(), lastRun: meta?.last_run || null, loadedAt: Date.now() };
   return state.calendar;
 }
 
@@ -726,10 +728,68 @@ noteSheet.addEventListener("click", (ev) => {
 
 // ---------- Settings ----------
 
-function showSettings() {
+// Defaults when settings/app does not exist yet (the repository's settings.yaml values)
+const DEFAULT_DIGEST = { digest_time: "05:00", timezone: "America/Los_Angeles" };
+
+async function showSettings() {
+  const navigation = state.navigation;
   state.page = "settings";
   document.title = "Settings";
   show("settings", { title: "Settings" }, view.settingsPage(state.user.email));
+  bindPinForm();
+  try {
+    const [saved] = await Promise.all([data.getAppSettings(), ensureCalendar(true)]);
+    if (navigation !== state.navigation) return;
+    const current = saved || DEFAULT_DIGEST;
+    renderDigest(current.digest_time, current.timezone, Boolean(saved));
+  } catch (err) {
+    if (navigation === state.navigation) {
+      content.querySelector("#digest-section").innerHTML = `<p class="msg">Could not load the digest time. ${view.e(errorText(err))}</p>`;
+    }
+  }
+}
+
+function renderDigest(time, timezone, fromApp) {
+  const section = content.querySelector("#digest-section");
+  if (!section) return;
+  section.innerHTML = view.digestSettings({
+    time, timezone, fromApp,
+    times: schedule.timeOptions(),
+    zones: schedule.timezoneOptions(),
+    next: schedule.nextRunText(time, timezone, state.calendar?.lastRun),
+    last: schedule.lastRunText(state.calendar?.lastRun, timezone),
+  });
+  const form = section.querySelector("#digest-form");
+  // The "next run" line follows the choices before saving
+  form.addEventListener("change", () => {
+    form.querySelector("[data-next]").textContent = schedule.nextRunText(form.elements.time.value,
+      form.elements.timezone.value, state.calendar?.lastRun);
+  });
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const msg = form.querySelector(".msg");
+    const newTime = form.elements.time.value;
+    const newZone = form.elements.timezone.value;
+    msg.classList.remove("ok");
+    if (!schedule.validTime(newTime) || !schedule.validTimezone(newZone)) {
+      msg.textContent = "Choose a time and a time zone from the lists.";
+      return;
+    }
+    msg.textContent = "Saving…";
+    try {
+      await data.saveAppSettings(newTime, newZone);
+      toast("Saved");
+      renderDigest(newTime, newZone, true);
+      const after = content.querySelector("#digest-form .msg");
+      after.textContent = `Saved. Next run: ${schedule.nextRunText(newTime, newZone, state.calendar?.lastRun)}`;
+      after.classList.add("ok");
+    } catch (err) {
+      msg.textContent = `Could not save: ${errorText(err)}`;
+    }
+  });
+}
+
+function bindPinForm() {
   const form = content.querySelector("#pin-form");
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();

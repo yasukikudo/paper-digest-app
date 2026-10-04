@@ -458,6 +458,13 @@ button.date-pick { border: 0; background: none; color: var(--text); font: inheri
 .more-btn { margin-top: .75rem; }
 .appeared { color: var(--muted); font-size: .78rem; margin: 0 4px 1rem; }
 
+/* ---------- Settings: daily digest time ---------- */
+.select.inline { flex: 0 1 auto; max-width: 62%; }
+.select.inline select { box-shadow: none; background: var(--chip); min-height: 34px; font-size: .85rem; }
+.row .value.small { font-size: .78rem; text-align: right; white-space: normal; }
+#digest-form .hint { margin-top: .6rem; }
+#digest-form .msg { margin: .4rem 16px; }
+
 /* ---------- Motion (stopped when the device asks for reduced motion) ---------- */
 .content.enter > * { animation: enter .24s var(--ease); }
 @keyframes enter { from { opacity: 0; transform: translateY(6px); } }

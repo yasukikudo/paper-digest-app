@@ -8,12 +8,12 @@ import {
   EmailAuthProvider, reauthenticateWithCredential, updatePassword,
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 import {
-  getFirestore, collection, doc, getDoc, getDocs, addDoc, onSnapshot,
+  getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, onSnapshot,
   runTransaction, arrayUnion,
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);   // stays signed in on this device until sign-out
@@ -62,6 +62,17 @@ export async function getDay(date) {
 export async function getMeta(name) {
   const snap = await getDoc(doc(db, "meta", name));
   return snap.exists() ? snap.data() : null;
+}
+
+// The morning digest time and time zone (settings/app); null if not set yet
+export async function getAppSettings() {
+  const snap = await getDoc(doc(db, "settings", "app"));
+  return snap.exists() ? snap.data() : null;
+}
+
+// Only these three fields may be written (see the security rules)
+export function saveAppSettings(digestTime, timezone) {
+  return setDoc(doc(db, "settings", "app"), { digest_time: digestTime, timezone, updated_at: isoNow() });
 }
 
 // One shard of the paper index (index/{id}): its entries, newest first

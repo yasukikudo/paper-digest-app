@@ -384,11 +384,37 @@ export function loginPage(email, message = "") {
     + "</form></section>";
 }
 
-export function settingsPage(email) {
+// Settings → Daily digest time. `digest`: {time, timezone, times, zones: {common, rest}, next,
+// last, fromApp}; null while loading.
+function digestSection(digest) {
+  if (!digest) return '<p class="group-label">Daily digest time</p><div class="inset"><p class="row"><span>Loading…</span></p></div>';
+  const option = (value, label, selected) => `<option value="${e(value)}"${selected ? " selected" : ""}>${e(label)}</option>`;
+  const zones = digest.zones.common.includes(digest.timezone) || digest.zones.rest.includes(digest.timezone)
+    ? digest.zones : { ...digest.zones, common: [digest.timezone, ...digest.zones.common] };
+  return '<p class="group-label">Daily digest time</p>'
+    + '<form id="digest-form"><div class="inset">'
+    + `<label class="row"><span>Time</span><span class="select inline"><select name="time">`
+    + digest.times.map(([value, label]) => option(value, label, value === digest.time)).join("")
+    + `</select>${ICONS.chevronDown}</span></label>`
+    + `<label class="row"><span>Time zone</span><span class="select inline"><select name="timezone">`
+    + `<optgroup label="Common">${zones.common.map((z) => option(z, z.replace(/_/g, " "), z === digest.timezone)).join("")}</optgroup>`
+    + `<optgroup label="All time zones">${zones.rest.map((z) => option(z, z.replace(/_/g, " "), z === digest.timezone)).join("")}</optgroup>`
+    + `</select>${ICONS.chevronDown}</span></label>`
+    + `<p class="row"><span>Next run</span><span class="value" data-next>${e(digest.next)}</span></p>`
+    + `<p class="row"><span>Last run</span><span class="value small">${e(digest.last)}</span></p>`
+    + "</div>"
+    + '<p class="hint">The job checks every hour at :17 (UTC) and runs the digest at its first check after this time, '
+    + "once a day. GitHub can start it up to about an hour late. The time zone also decides which day a digest belongs to."
+    + (digest.fromApp ? "" : " (Not saved yet: these are the defaults from the repository.)") + "</p>"
+    + '<p class="msg" role="status"></p><button type="submit" class="btn primary wide">Save digest time</button></form>';
+}
+
+export function settingsPage(email, digest = null) {
   const pin = (name, label, auto) => `<label class="row"><span>${label}</span><input type="password" name="${name}"`
     + ` inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="${auto}" placeholder="••••••" required></label>`;
   return '<section class="settings">'
     + `<p class="group-label">Account</p><div class="inset"><p class="row"><span>Signed in as</span><span class="value">${e(email)}</span></p></div>`
+    + `<div id="digest-section">${digestSection(digest)}</div>`
     + '<p class="group-label">Change PIN</p><form id="pin-form"><div class="inset">'
     + pin("current", "Current PIN", "current-password") + pin("next", "New PIN", "new-password")
     + pin("again", "New PIN again", "new-password") + "</div>"
@@ -448,6 +474,8 @@ export function resultRows(entries, total, threshold, isSaved, more) {
 }
 
 // ---------- One paper (from Browse) ----------
+
+export const digestSettings = digestSection;
 
 export function paperPage(p, ctx, fieldNames, state) {
   const days = (p.appeared_in || []).map((d) => `<a href="#/day/${e(d)}">${e(d)}</a>`).join(", ");
