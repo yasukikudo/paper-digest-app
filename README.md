@@ -1,0 +1,88 @@
+# paper-digest-app
+
+A small web app for reading the paper-digest data on a phone: each morning's new papers,
+grouped by field, plus a personal library of saved papers with full-text summaries.
+
+Live at <https://yasukikudo.com/paper-digest-app/> (GitHub Pages). Only the owner's account can
+sign in and read data; this repository holds no data, only the page code.
+
+## How it works
+
+- **Static files only.** HTML, CSS and JavaScript modules, no build step. The Firebase
+  JavaScript SDK (v12.19.0) is loaded as ES modules from `www.gstatic.com`.
+- **Data** lives in Cloud Firestore in the Firebase project `paper-digest-a68d0`. A scheduled
+  job in a separate private repository writes the papers every morning and processes full-text
+  requests a few times a day. The data formats are described in that repository's `schema.md`.
+- **The app reads** `days`, `papers`, `library`, `authors` and `requests`, and **writes** only:
+  - `library/{doi_key}`: save / unsave, status (to read, read), notes. A missing document is
+    created in the full schema shape; existing documents get only changed fields, and notes are
+    added with `arrayUnion`, inside a transaction (the scripts write the same documents).
+  - `requests`: a new request with `status: "pending"` and `requested_by: "app"` for papers whose
+    open-access PDF can be downloaded automatically (`fulltext_access: "auto"`). Requesting also
+    saves the paper. A paper with a waiting or running request cannot be requested again.
+- Papers are always addressed by the stored `doi_key`; keys are never computed from DOIs.
+- `library` and `requests` are watched live (`onSnapshot`), so saving, notes and finished
+  full-text summaries appear without reloading. Only the affected parts of a card are redrawn.
+  Because library writes are transactions (confirmed only after a round trip), the app shows a
+  change at once and replaces it with the stored document when the write finishes, or undoes it
+  if the write fails.
+- **Layout:** a fixed top bar (date with previous / next, or the page title), one scrolling
+  content area and a fixed tab bar (Today, Library, Settings), with safe-area padding for
+  iPhone notches. Notes are added in a bottom sheet; short messages appear as a toast.
+  Animations stop when the device asks for reduced motion. Icons are inline SVG.
+- Field names come from each day document (`days.fields`); days written before that field
+  existed use `DEFAULT_FIELDS` in `js/labels.js`.
+- **Sign-in** uses Firebase Authentication (email and password), with a 6-digit PIN as the
+  password. There is no sign-up screen; the account is created in the Firebase console. The
+  email is remembered in this browser's `localStorage` only, so later sign-ins need just the PIN.
+  The session lasts until you sign out. Settings (⚙) has *Change PIN* and *Sign out*.
+- **Security** is enforced by the Firestore security rules (kept in the private repository),
+  which allow only the owner's UID and only the writes listed above. The web configuration in
+  `js/firebase-config.js` is public by design.
+- Light and dark mode follow the device. There is no service worker, so a reload always gets
+  the current code; the manifest and icons allow adding the app to the home screen.
+
+## Files
+
+```
+index.html               page shell; loads js/app.js
+manifest.webmanifest     home-screen app settings
+icons/                   app icons (192, 512, maskable 512, apple-touch-icon 180)
+css/style.css            styles (based on the paper-digest HTML pages)
+js/firebase-config.js    Firebase web configuration
+js/labels.js             labels not stored in Firestore (default field names, summary sections, ...)
+js/data.js               sign-in, Firestore reads, live updates and writes
+js/render.js             HTML for pages and paper cards
+js/app.js                routing (#/day/YYYY-MM-DD, #/library, #/settings) and actions
+.nojekyll                serve files as they are on GitHub Pages
+```
+
+## Updating
+
+1. Edit the files and test locally:
+   ```bash
+   cd ~/projects/paper-digest-app
+   python3 -m http.server 8000      # then open http://localhost:8000/
+   ```
+   `localhost` is an authorized domain in Firebase Authentication, so sign-in works locally
+   against the real data.
+2. Commit and push to `main`; GitHub Pages republishes within a minute or two.
+3. To update the Firebase SDK, change the version in the three import URLs in `js/data.js`.
+
+If the data format changes (`schema.md` in the private repository), update `js/data.js`
+(`SCHEMA_VERSION`, `newEntry`, the request shape) and `js/render.js`.
+
+## Firebase settings
+
+All in the [Firebase console](https://console.firebase.google.com/), project `paper-digest-a68d0`:
+
+| What | Where |
+|---|---|
+| Web configuration (`js/firebase-config.js`) | Project settings → General → Your apps → paper-digest-app → Config |
+| Sign-in method (Email/Password) | Authentication → Sign-in method |
+| The account, its UID, resetting the PIN | Authentication → Users |
+| Authorized domains (`localhost`, `yasukikudo.com`) | Authentication → Settings → Authorized domains |
+| Sign-up disabled | Authentication → Settings → User actions |
+| Security rules | Firestore Database → Rules (source: `firestore.rules` in the private repository) |
+
+Firebase Hosting is not used.

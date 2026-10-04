@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Paper digest</title>
+  <meta name="description" content="Daily digest of new political science papers">
+  <meta name="theme-color" content="#f4f2ed" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121417" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Digest">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body class="signed-out">
+  <!-- Fixed top bar: date and previous / next on a day, the page title elsewhere -->
+  <header class="appbar" id="appbar"></header>
+
+  <!-- The only scrolling area -->
+  <main class="content" id="content">
+    <div class="skeleton" aria-hidden="true"><div class="sk-card"></div><div class="sk-card"></div></div>
+  </main>
+
+  <!-- Fixed tab bar -->
+  <nav class="tabbar" id="tabbar" aria-label="Sections">
+    <a href="#/" data-tab="today">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/><circle cx="12" cy="15" r="1.6" class="fill"/></svg>
+      <span>Today</span>
+    </a>
+    <a href="#/library" data-tab="library">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4-6.5 4v-16a1 1 0 0 1 1-1z"/></svg>
+      <span>Library</span>
+    </a>
+    <a href="#/settings" data-tab="settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg>
+      <span>Settings</span>
+    </a>
+  </nav>
+
+  <!-- Bottom sheet for adding a note -->
+  <div class="sheet-backdrop" id="sheet-backdrop" hidden></div>
+  <form class="sheet" id="note-sheet" role="dialog" aria-modal="true" aria-labelledby="note-sheet-title" hidden>
+    <div class="sheet-grip" aria-hidden="true"></div>
+    <h2 id="note-sheet-title">Add note</h2>
+    <p class="sheet-paper"></p>
+    <textarea name="text" rows="4" placeholder="Note" aria-label="Note"></textarea>
+    <div class="sheet-buttons">
+      <button type="button" class="btn" data-act="sheet-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Add note</button>
+    </div>
+  </form>
+
+  <!-- Short messages ("Saved", "Requested") -->
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <noscript><p class="empty">This app needs JavaScript.</p></noscript>
+</body>
+</html>
