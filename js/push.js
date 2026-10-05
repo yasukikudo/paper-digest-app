@@ -41,15 +41,24 @@ export async function registerWorker() {
   return registration;
 }
 
-// "enabled" | "off" | "blocked" | "ios-browser" | "unsupported"
+// "enabled" | "off" | "blocked" | "ios-browser" | "unsupported".
+// "enabled" only if this device's push_tokens document really exists; if it has gone missing,
+// the device is registered again here (and reported "off" if that fails).
 export async function status() {
   if (isIOS() && !isStandalone()) return "ios-browser";
   const supported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window
     && await isSupported().catch(() => false);
   if (!supported) return "unsupported";
   if (Notification.permission === "denied") return "blocked";
-  if (Notification.permission === "granted" && storage.get()) return "enabled";
-  return "off";
+  if (Notification.permission !== "granted" || !storage.get()) return "off";
+  if (await getPushToken(storage.get()).catch(() => null)) return "enabled";
+  try {
+    await register();
+    return "enabled";
+  } catch {
+    storage.remove();
+    return "off";
+  }
 }
 
 async function sha256(text) {
@@ -89,6 +98,7 @@ export async function disable() {
 }
 
 // On app start: keep this device's token current (tokens can change) and its last_used_at
+// (status() already registers again if the document has gone missing)
 export async function refresh() {
   if (await status() === "enabled") await register().catch(() => {});
 }

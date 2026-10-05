@@ -58,8 +58,10 @@ sign in and read data; this repository holds no data, only the page code.
 - **Notifications** (Settings → Notifications): Firebase Cloud Messaging web push, on an iPhone
   home-screen app (iOS 16.4 or later) and in Chrome on the Mac. Enabling asks for permission
   only when the button is pressed, then stores the device's token as `push_tokens/{SHA-256}`.
-  The scripts send data-only messages after each morning run ("Today's digest: 8 new papers ·
-  1 highlight", or "no new papers", which can be turned off and leaves the badge alone) and
+  *Enabled* is shown only when this device's `push_tokens` document exists; if it has gone
+  missing, the app registers the device again (also on every start). The scripts send
+  data-only messages after each morning run ("Today's digest: 8 new papers · 1 highlight", or
+  "no new papers", which can be turned off and leaves the badge alone) and
   when a full-text summary is ready; `sw.js` shows them, opens the page when one is tapped, and sets
   the icon badge. Each kind can be turned off (`settings/app`). *Show a test notification*
   shows one on this device only; `python digest.py --test-push` in the private repository sends
