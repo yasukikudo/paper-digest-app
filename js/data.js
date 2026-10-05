@@ -8,14 +8,14 @@ import {
   EmailAuthProvider, reauthenticateWithCredential, updatePassword,
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 import {
-  getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, onSnapshot,
+  getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, deleteDoc, onSnapshot,
   runTransaction, arrayUnion,
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
-const app = initializeApp(firebaseConfig);
+export const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);   // stays signed in on this device until sign-out
 const db = getFirestore(app);
 
@@ -70,9 +70,40 @@ export async function getAppSettings() {
   return snap.exists() ? snap.data() : null;
 }
 
-// Only these three fields may be written (see the security rules)
+// The rules allow only digest_time, timezone, updated_at and notify_digest / notify_fulltext.
+// Merged, so saving the time keeps the notification choices and the other way round.
 export function saveAppSettings(digestTime, timezone) {
-  return setDoc(doc(db, "settings", "app"), { digest_time: digestTime, timezone, updated_at: isoNow() });
+  return setDoc(doc(db, "settings", "app"), { digest_time: digestTime, timezone, updated_at: isoNow() }, { merge: true });
+}
+
+// `current` supplies the digest time and time zone when settings/app does not exist yet
+export function saveNotifyChoice(kind, on, current) {
+  return setDoc(doc(db, "settings", "app"), {
+    digest_time: current.digest_time, timezone: current.timezone,
+    [`notify_${kind}`]: on, updated_at: isoNow(),
+  }, { merge: true });
+}
+
+// What has been seen (settings/seen): {digest_date, fulltext_at}; live, for the badge and tab dots
+export const watchSeen = (callback, onError) => onSnapshot(doc(db, "settings", "seen"),
+  (snap) => callback(snap.exists() ? snap.data() : null), onError);
+
+export function markSeen(fields) {
+  return setDoc(doc(db, "settings", "seen"), { ...fields, updated_at: isoNow() }, { merge: true });
+}
+
+// Devices that receive notifications: push_tokens/{SHA-256 of the token}
+export async function getPushToken(id) {
+  const snap = await getDoc(doc(db, "push_tokens", id));
+  return snap.exists() ? snap.data() : null;
+}
+
+export function savePushToken(id, data) {
+  return setDoc(doc(db, "push_tokens", id), data);
+}
+
+export function deletePushToken(id) {
+  return deleteDoc(doc(db, "push_tokens", id));
 }
 
 // One shard of the paper index (index/{id}): its entries, newest first

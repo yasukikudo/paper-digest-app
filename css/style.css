@@ -342,11 +342,12 @@ input[inputmode="numeric"] { letter-spacing: .4em; font-variant-numeric: tabular
 }
 .row + .row { border-top: .5px solid var(--line); }
 .row .value { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row input {
+.row:has(.value) > span:first-child { flex: none; white-space: nowrap; }   /* e.g. "Last run" stays on one line */
+.row input[type="password"] {
   width: 8.5rem; text-align: right; border: 0; background: none; color: var(--text);
   font: inherit; font-size: 16px; min-height: 44px;
 }
-.row input:focus { outline: none; }
+.row input[type="password"]:focus { outline: none; }
 .settings form .msg { margin: .6rem 16px; }
 .signout { margin-top: 2rem; }
 button.row { width: 100%; border: 0; background: none; justify-content: center; cursor: pointer; font-weight: 500; }
@@ -464,6 +465,33 @@ button.date-pick { border: 0; background: none; color: var(--text); font: inheri
 .row .value.small { font-size: .78rem; text-align: right; white-space: normal; }
 #digest-form .hint { margin-top: .6rem; }
 #digest-form .msg { margin: .4rem 16px; }
+
+/* ---------- Notifications and dots ---------- */
+.tabbar a { position: relative; }
+.tabbar a.has-dot::after {
+  content: ""; position: absolute; top: 7px; left: calc(50% + 9px);
+  width: 8px; height: 8px; border-radius: 50%; background: #e5484d; box-shadow: 0 0 0 2px var(--bar);
+}
+.status-row { font-size: .84rem; color: var(--muted); }
+.status-row.ok { color: var(--ok); }
+.status-row.bad { color: var(--danger); }
+.switch-row { cursor: pointer; }
+.switch-row.disabled { color: var(--muted); cursor: default; }
+.switch:disabled { opacity: .45; cursor: default; }
+.switch {
+  appearance: none; -webkit-appearance: none; position: relative; flex: none; margin: 0; padding: 0; cursor: pointer;
+  width: 46px; min-width: 46px; max-width: 46px; height: 28px; min-height: 0; border-radius: 999px; background: var(--chip); box-shadow: inset 0 0 0 1px var(--line);
+  transition: background-color .2s var(--ease);
+}
+.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); transition: left .2s var(--ease);
+}
+.switch:checked { background: var(--ok); box-shadow: none; }
+.switch:checked::after { left: calc(100% - 26px); }   /* on: the knob at the right end */
+.switch:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.stack { display: flex; flex-direction: column; gap: .5rem; margin-top: .75rem; }
+.btn.link.danger { color: var(--danger); }
 
 /* ---------- Motion (stopped when the device asks for reduced motion) ---------- */
 .content.enter > * { animation: enter .24s var(--ease); }

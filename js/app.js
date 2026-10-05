@@ -7,6 +7,7 @@ import * as data from "./data.js";
 import * as view from "./render.js";
 import { DEFAULT_FIELDS, STATUSES } from "./labels.js";
 import * as schedule from "./schedule.js";
+import * as push from "./push.js";
 
 const content = document.getElementById("content");
 const appbar = document.getElementById("appbar");
@@ -41,6 +42,9 @@ const state = {
   navigation: 0,             // increases on every page change; stale loads are dropped
   previousHash: "",
   noteKey: null,             // paper the note sheet is for
+  seen: undefined,           // settings/seen (live): {digest_date, fulltext_at}; null if missing
+  appSettings: null,         // settings/app, as last read
+  pushBusy: false,
   unsubscribe: [],
 };
 
@@ -154,7 +158,10 @@ function startSession(user) {
   state.unsubscribe = [
     data.watchCollection("library", (docs) => { state.library = docs; onLiveChange(); }, fail),
     data.watchCollection("requests", (docs) => { state.requests = docs; onLiveChange(); }, fail),
+    data.watchSeen(onSeen, fail),
   ];
+  push.registerWorker().then(() => push.refresh());
+  ensureCalendar().then(updateIndicators).catch(() => {});
   route();
 }
 
@@ -168,6 +175,8 @@ function endSession() {
   state.authors.clear();
   state.calendar = null;
   state.index = null;
+  state.seen = undefined;
+  updateIndicators();
   closePanels();
   calSide.innerHTML = "";
 }
@@ -206,6 +215,7 @@ async function ensureCalendar(force = false) {
     days = Object.fromEntries((await data.dayIds()).map((d) => [d, { papers: 0, highlights: 0 }]));
   }
   state.calendar = { days, dates: Object.keys(days).sort(), lastRun: meta?.last_run || null, loadedAt: Date.now() };
+  updateIndicators();
   return state.calendar;
 }
 
@@ -242,6 +252,7 @@ async function showDay(date) {
     if (navigation !== state.navigation) return;
     show("today", bar, view.dayPage(day, papers, fields, stateOf));
     document.title = `Paper digest ${date}`;
+    markDaySeen(date);
   } catch (err) {
     if (navigation === state.navigation) {
       show("today", { date: date || "" }, `<p class="empty">Could not load the digest. ${view.e(errorText(err))}</p>`);
@@ -464,7 +475,10 @@ async function showLibrary() {
   showLoading("library", { title: "Library" });
   try {
     await data.getMany("papers", [...state.library.keys()], state.papers);
-    if (navigation === state.navigation) renderLibrary(false);
+    if (navigation === state.navigation) {
+      renderLibrary(false);
+      markFulltextSeen();
+    }
   } catch (err) {
     if (navigation === state.navigation) {
       show("library", { title: "Library" }, `<p class="empty">Could not load the library. ${view.e(errorText(err))}</p>`);
@@ -504,6 +518,56 @@ async function onLiveChange() {
   }
   if (["day", "library", "paper"].includes(state.page)) refreshCards();
   if (state.page === "browse") refreshMarks();
+  updateIndicators();
+  if (state.page === "library") markFulltextSeen();
+}
+
+// ---------- What has been seen: tab dots and the icon badge ----------
+// settings/seen (shared by all devices): digest_date = the latest day viewed,
+// fulltext_at = when the Library was last viewed.
+
+function onSeen(doc) {
+  state.seen = doc;
+  // First use: start counting full-text summaries from now
+  if (!doc?.fulltext_at) data.markSeen({ fulltext_at: data.isoNow() }).catch(() => {});
+  updateIndicators();
+}
+
+// Days after the latest one viewed (if never viewed: only the latest day)
+function unseenDays() {
+  const dates = state.calendar?.dates || [];
+  if (!dates.length || state.seen === undefined) return [];
+  const seen = state.seen?.digest_date ?? (dates.at(-2) || "");
+  return dates.filter((d) => d > seen);
+}
+
+function unseenFulltext() {
+  const since = Date.parse(state.seen?.fulltext_at || "");
+  if (!since) return false;
+  return [...state.library.values()].some((x) => x.saved && Date.parse(x.fulltext?.created_at || "") > since);
+}
+
+function updateIndicators() {
+  const days = unseenDays();
+  const papers = days.reduce((n, d) => n + (state.calendar?.days[d]?.papers || 0), 0);
+  tabbar.querySelector('[data-tab="today"]').classList.toggle("has-dot", days.length > 0);
+  tabbar.querySelector('[data-tab="library"]').classList.toggle("has-dot", state.user ? unseenFulltext() : false);
+  push.setBadge(state.user ? papers : 0);
+}
+
+function markDaySeen(date) {
+  if (state.seen === undefined || date <= (state.seen?.digest_date || "")) return;
+  state.seen = { ...(state.seen || {}), digest_date: date };
+  updateIndicators();
+  data.markSeen({ digest_date: date }).catch(() => {});
+}
+
+function markFulltextSeen() {
+  if (!unseenFulltext()) return;
+  const now = data.isoNow();
+  state.seen = { ...(state.seen || {}), fulltext_at: now };
+  updateIndicators();
+  data.markSeen({ fulltext_at: now }).catch(() => {});
 }
 
 // Saved marks in the Browse list
@@ -741,7 +805,9 @@ async function showSettings() {
     const [saved] = await Promise.all([data.getAppSettings(), ensureCalendar(true)]);
     if (navigation !== state.navigation) return;
     const current = saved || DEFAULT_DIGEST;
+    state.appSettings = current;
     renderDigest(current.digest_time, current.timezone, Boolean(saved));
+    await renderNotify();
   } catch (err) {
     if (navigation === state.navigation) {
       content.querySelector("#digest-section").innerHTML = `<p class="msg">Could not load the digest time. ${view.e(errorText(err))}</p>`;
@@ -778,6 +844,7 @@ function renderDigest(time, timezone, fromApp) {
     msg.textContent = "Saving…";
     try {
       await data.saveAppSettings(newTime, newZone);
+      state.appSettings = { ...(state.appSettings || {}), digest_time: newTime, timezone: newZone };
       toast("Saved");
       renderDigest(newTime, newZone, true);
       const after = content.querySelector("#digest-form .msg");
@@ -788,6 +855,56 @@ function renderDigest(time, timezone, fromApp) {
     }
   });
 }
+
+async function renderNotify() {
+  const section = content.querySelector("#notify-section");
+  if (!section) return;
+  const s = state.appSettings || DEFAULT_DIGEST;
+  section.innerHTML = view.notifySection({
+    status: await push.status(), platform: push.platformName(), busy: state.pushBusy,
+    digestOn: s.notify_digest !== false, emptyOn: s.notify_empty !== false, fulltextOn: s.notify_fulltext !== false,
+  });
+}
+
+content.addEventListener("change", async (ev) => {
+  const kind = ev.target.dataset?.notify;
+  if (!kind || state.page !== "settings") return;
+  const on = ev.target.checked;
+  try {
+    await data.saveNotifyChoice(kind, on, state.appSettings || DEFAULT_DIGEST);
+    state.appSettings = { ...(state.appSettings || DEFAULT_DIGEST), [`notify_${kind}`]: on };
+    toast(on ? "Turned on" : "Turned off");
+    if (kind === "digest") await renderNotify();   // the no-new-papers switch depends on it
+  } catch (err) {
+    ev.target.checked = !on;
+    toast(`Could not save: ${errorText(err)}`, "error");
+  }
+});
+
+content.addEventListener("click", async (ev) => {
+  const what = ev.target.closest("button[data-act]")?.dataset.act;
+  if (!what?.startsWith("push-") || state.page !== "settings") return;
+  try {
+    if (what === "push-enable" || what === "push-disable") {
+      state.pushBusy = true;
+      await renderNotify();
+      if (what === "push-enable") {
+        const result = await push.enable();
+        toast(result === "enabled" ? "Notifications enabled" : result === "blocked" ? "Notifications are blocked" : "Not enabled");
+      } else {
+        await push.disable();
+        toast("This device was removed");
+      }
+    } else if (what === "push-test") {
+      await push.testNotification();
+    }
+  } catch (err) {
+    toast(`Notifications: ${errorText(err)}`, "error");
+  } finally {
+    state.pushBusy = false;
+    await renderNotify();
+  }
+});
 
 function bindPinForm() {
   const form = content.querySelector("#pin-form");

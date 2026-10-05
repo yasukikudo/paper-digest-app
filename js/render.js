@@ -409,12 +409,45 @@ function digestSection(digest) {
     + '<p class="msg" role="status"></p><button type="submit" class="btn primary wide">Save digest time</button></form>';
 }
 
+// Settings → Notifications. `n`: {status, platform, digestOn, fulltextOn, busy}; null while loading.
+const NOTIFY_STATUS = {
+  enabled: ["Enabled on this device", "ok"],
+  off: ["Not enabled on this device", ""],
+  blocked: ["Blocked: allow notifications for this site in the browser (and for the browser in System Settings → Notifications)", "bad"],
+  unsupported: ["Not supported in this browser", "bad"],
+  "ios-browser": ["Add to Home Screen and open from there to enable notifications", ""],
+};
+
+export function notifySection(n) {
+  if (!n) return '<p class="group-label">Notifications</p><div class="inset"><p class="row"><span>Loading…</span></p></div>';
+  const [label, cls] = NOTIFY_STATUS[n.status] || [n.status, ""];
+  const toggle = (kind, text, on, off = false) => `<label class="row switch-row${off ? " disabled" : ""}"><span>${text}</span>`
+    + `<input type="checkbox" class="switch" data-notify="${kind}"${on ? " checked" : ""}${off ? " disabled" : ""}></label>`;
+  const buttons = [];
+  if (n.status === "off") buttons.push(`<button type="button" class="btn primary wide" data-act="push-enable"${n.busy ? " disabled" : ""}>${n.busy ? "Enabling…" : "Enable notifications"}</button>`);
+  if (n.status === "enabled") {
+    buttons.push('<button type="button" class="btn wide" data-act="push-test">Show a test notification</button>');
+    buttons.push(`<button type="button" class="btn wide link danger" data-act="push-disable"${n.busy ? " disabled" : ""}>Remove this device</button>`);
+  }
+  return '<p class="group-label">Notifications</p><div class="inset">'
+    + `<p class="row"><span>This device</span><span class="value small">${e(n.platform)}</span></p>`
+    + `<p class="row status-row ${cls}"><span>${e(label)}</span></p>`
+    + toggle("digest", "New papers each morning", n.digestOn)
+    + toggle("empty", "Notify even when there are no new papers", n.emptyOn, !n.digestOn)
+    + toggle("fulltext", "Full-text summary ready", n.fulltextOn)
+    + "</div>"
+    + '<p class="hint">The switches apply to every device. Notifications go to each device where they are enabled. '
+    + "The no-new-papers notice confirms that the morning digest ran; it does not change the icon badge.</p>"
+    + `<div class="stack">${buttons.join("")}</div>`;
+}
+
 export function settingsPage(email, digest = null) {
   const pin = (name, label, auto) => `<label class="row"><span>${label}</span><input type="password" name="${name}"`
     + ` inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="${auto}" placeholder="••••••" required></label>`;
   return '<section class="settings">'
     + `<p class="group-label">Account</p><div class="inset"><p class="row"><span>Signed in as</span><span class="value">${e(email)}</span></p></div>`
     + `<div id="digest-section">${digestSection(digest)}</div>`
+    + `<div id="notify-section">${notifySection(null)}</div>`
     + '<p class="group-label">Change PIN</p><form id="pin-form"><div class="inset">'
     + pin("current", "Current PIN", "current-password") + pin("next", "New PIN", "new-password")
     + pin("again", "New PIN again", "new-password") + "</div>"

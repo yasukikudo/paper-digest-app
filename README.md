@@ -26,6 +26,8 @@ sign in and read data; this repository holds no data, only the page code.
   - `library/{doi_key}`: save / unsave, status (to read, read), notes. A missing document is
     created in the full schema shape; existing documents get only changed fields, and notes are
     added with `arrayUnion`, inside a transaction (the scripts write the same documents).
+  - `settings/app` (digest time, time zone, notification choices), `settings/seen` (what has
+    been viewed) and `push_tokens` (this device's notification token)
   - `requests`: a new request with `status: "pending"` and `requested_by: "app"` for papers whose
     open-access PDF can be downloaded automatically (`fulltext_access: "auto"`). Requesting also
     saves the paper. A paper with a waiting or running request cannot be requested again.
@@ -53,17 +55,35 @@ sign in and read data; this repository holds no data, only the page code.
 - **Security** is enforced by the Firestore security rules (kept in the private repository),
   which allow only the owner's UID and only the writes listed above. The web configuration in
   `js/firebase-config.js` is public by design.
-- Light and dark mode follow the device. There is no service worker, so a reload always gets
-  the current code; the manifest and icons allow adding the app to the home screen.
+- **Notifications** (Settings → Notifications): Firebase Cloud Messaging web push, on an iPhone
+  home-screen app (iOS 16.4 or later) and in Chrome on the Mac. Enabling asks for permission
+  only when the button is pressed, then stores the device's token as `push_tokens/{SHA-256}`.
+  The scripts send data-only messages after each morning run ("Today's digest: 8 new papers ·
+  1 highlight", or "no new papers", which can be turned off and leaves the badge alone) and
+  when a full-text summary is ready; `sw.js` shows them, opens the page when one is tapped, and sets
+  the icon badge. Each kind can be turned off (`settings/app`). *Show a test notification*
+  shows one on this device only; `python digest.py --test-push` in the private repository sends
+  one through FCM.
+- **Badge and dots:** `settings/seen` (shared by all devices, watched live) records the latest
+  day viewed and when the Library was last viewed. Days after it put a dot on the Today tab and
+  their number of papers on the icon badge (Badging API, where supported); a newer full-text
+  summary puts a dot on the Library tab. Viewing the day / the Library clears them.
+- **Service worker:** `sw.js` handles notifications and the badge only. It has no fetch handler
+  and caches nothing, so a reload always gets the current code.
+- Light and dark mode follow the device; the manifest and icons allow adding the app to the
+  home screen.
 
 ## Files
 
 ```
 index.html               page shell; loads js/app.js
+sw.js                    service worker: notifications and badge only (no caching)
 manifest.webmanifest     home-screen app settings
 icons/                   app icons (192, 512, maskable 512, apple-touch-icon 180)
 css/style.css            styles (based on the paper-digest HTML pages)
-js/firebase-config.js    Firebase web configuration
+js/firebase-config.js    Firebase web configuration and the Web Push public key
+js/push.js               notifications on this device: permission, token, test, badge
+js/schedule.js           digest time and time zone helpers for Settings
 js/labels.js             labels not stored in Firestore (default field names, summary sections, ...)
 js/data.js               sign-in, Firestore reads, live updates and writes
 js/render.js             HTML for pages and paper cards
@@ -100,5 +120,6 @@ All in the [Firebase console](https://console.firebase.google.com/), project `pa
 | Authorized domains (`localhost`, `yasukikudo.com`) | Authentication → Settings → Authorized domains |
 | Sign-up disabled | Authentication → Settings → User actions |
 | Security rules | Firestore Database → Rules (source: `firestore.rules` in the private repository) |
+| Web Push certificate (`vapidKey` in `js/firebase-config.js`) | Project settings → Cloud Messaging → Web configuration |
 
 Firebase Hosting is not used.
