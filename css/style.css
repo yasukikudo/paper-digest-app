@@ -522,6 +522,13 @@ button.date-pick { border: 0; background: none; color: var(--text); font: inheri
 .journal.inactive { opacity: .65; }
 .rows.results { margin-top: .6rem; }
 
+/* ---------- Settings list (each row opens its own page) ---------- */
+a.menu-row { color: var(--text); text-decoration: none; cursor: pointer; }
+a.menu-row:active { background: var(--chip); }
+.menu-end { display: inline-flex; align-items: center; gap: .3rem; min-width: 0; }
+.menu-end .value { max-width: 13rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-end .icon { width: 16px; height: 16px; flex: none; color: var(--muted); }
+
 /* ---------- Motion (stopped when the device asks for reduced motion) ---------- */
 .content.enter > * { animation: enter .24s var(--ease); }
 @keyframes enter { from { opacity: 0; transform: translateY(6px); } }

@@ -416,12 +416,11 @@ export function loginPage(email, message = "") {
 // Settings → Daily digest time. `digest`: {time, timezone, times, zones: {common, rest}, next,
 // last, fromApp}; null while loading.
 function digestSection(digest) {
-  if (!digest) return '<p class="group-label">Daily digest time</p><div class="inset"><p class="row"><span>Loading…</span></p></div>';
+  if (!digest) return '<div class="inset"><p class="row"><span>Loading…</span></p></div>';
   const option = (value, label, selected) => `<option value="${e(value)}"${selected ? " selected" : ""}>${e(label)}</option>`;
   const zones = digest.zones.common.includes(digest.timezone) || digest.zones.rest.includes(digest.timezone)
     ? digest.zones : { ...digest.zones, common: [digest.timezone, ...digest.zones.common] };
-  return '<p class="group-label">Daily digest time</p>'
-    + '<form id="digest-form"><div class="inset">'
+  return '<form id="digest-form"><div class="inset">'
     + `<label class="row"><span>Time</span><span class="select inline"><select name="time">`
     + digest.times.map(([value, label]) => option(value, label, value === digest.time)).join("")
     + `</select>${ICONS.chevronDown}</span></label>`
@@ -448,7 +447,7 @@ const NOTIFY_STATUS = {
 };
 
 export function notifySection(n) {
-  if (!n) return '<p class="group-label">Notifications</p><div class="inset"><p class="row"><span>Loading…</span></p></div>';
+  if (!n) return '<div class="inset"><p class="row"><span>Loading…</span></p></div>';
   const [label, cls] = NOTIFY_STATUS[n.status] || [n.status, ""];
   const toggle = (kind, text, on, off = false) => `<label class="row switch-row${off ? " disabled" : ""}"><span>${text}</span>`
     + `<input type="checkbox" class="switch" data-notify="${kind}"${on ? " checked" : ""}${off ? " disabled" : ""}></label>`;
@@ -458,7 +457,7 @@ export function notifySection(n) {
     buttons.push('<button type="button" class="btn wide" data-act="push-test">Show a test notification</button>');
     buttons.push(`<button type="button" class="btn wide link danger" data-act="push-disable"${n.busy ? " disabled" : ""}>Remove this device</button>`);
   }
-  return '<p class="group-label">Notifications</p><div class="inset">'
+  return '<div class="inset">'
     + `<p class="row"><span>This device</span><span class="value small">${e(n.platform)}</span></p>`
     + `<p class="row status-row ${cls}"><span>${e(label)}</span></p>`
     + toggle("digest", "New papers each morning", n.digestOn)
@@ -473,7 +472,7 @@ export function notifySection(n) {
 // Settings → Members (admins). `m`: {users: [{uid, display_name, role, active, fulltext_allowed,
 // monthly_limit, used}], me}; null while loading.
 export function membersSection(m) {
-  if (!m) return '<p class="group-label">Members</p><div class="inset"><p class="row"><span>Loading…</span></p></div>';
+  if (!m) return '<div class="inset"><p class="row"><span>Loading…</span></p></div>';
   const rows = m.users.map((u) => {
     const self = u.uid === m.me;
     const limit = u.monthly_limit === null || u.monthly_limit === undefined ? "" : u.monthly_limit;
@@ -487,8 +486,7 @@ export function membersSection(m) {
       + `<label class="row"><span>Monthly limit</span><input type="number" class="limit" data-member="monthly_limit" min="0" max="1000" step="1" inputmode="numeric" placeholder="No limit" value="${e(limit)}"></label>`
       + "</div>";
   }).join("");
-  return '<p class="group-label">Members</p>'
-    + `<div class="members">${rows}</div>`
+  return `<div class="members">${rows}</div>`
     + '<p class="hint">An empty monthly limit means no limit. Summaries linked from an existing one are not counted. '
     + "Inactive members cannot use the app; their data is kept.</p>"
     + '<p class="group-label">Add a member</p>'
@@ -509,23 +507,49 @@ export function notRegisteredPage(email) {
     + '<button type="button" class="btn wide" data-act="signout">Sign out</button></section>';
 }
 
-export function settingsPage(email, digest = null) {
-  const pin = (name, label, auto) => `<label class="row"><span>${label}</span><input type="password" name="${name}"`
-    + ` inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="${auto}" placeholder="••••••" required></label>`;
+// Settings, as on a phone: a list of items, each opening its own page (#/settings/{id}).
+// `m`: {email, admin, values: {id: short current value}}
+export function settingsMenu(m) {
+  const row = (id, label, value = "") => `<a class="row menu-row" href="#/settings/${id}"><span>${e(label)}</span>`
+    + `<span class="menu-end"><span class="value small">${e(value)}</span>${ICONS.chevronRight}</span></a>`;
+  const v = m.values || {};
   return '<section class="settings">'
-    + `<p class="group-label">Account</p><div class="inset"><p class="row"><span>Signed in as</span><span class="value">${e(email)}</span></p></div>`
-    + (viewer.admin ? `<div id="digest-section">${digestSection(digest)}</div>` : "")
-    + '<div id="prefs-section"><p class="group-label">My journals</p><div class="inset"><p class="row"><span>Loading…</span></p></div></div>'
-    + `<div id="notify-section">${notifySection(null)}</div>`
-    + (viewer.admin ? `<div id="members-section">${membersSection(null)}</div>` : "")
-    + (viewer.admin ? '<div id="journals-section"></div><div id="languages-section"></div>' : "")
-    + '<p class="group-label">Change PIN</p><form id="pin-form"><div class="inset">'
-    + pin("current", "Current PIN", "current-password") + pin("next", "New PIN", "new-password")
-    + pin("again", "New PIN again", "new-password") + "</div>"
-    + '<p class="msg" role="status"></p><button type="submit" class="btn primary wide">Change PIN</button></form>'
+    + '<p class="group-label">Reading</p><div class="inset">'
+    + row("journals", "My journals", v.journals) + row("fields", "Favourite fields", v.fields)
+    + row("language", "Translation language", v.language) + "</div>"
+    + '<p class="group-label">Notifications</p><div class="inset">' + row("notifications", "Notifications", v.notifications) + "</div>"
+    + (m.admin ? '<p class="group-label">Administration</p><div class="inset">'
+      + row("digest", "Daily digest time", v.digest) + row("members", "Members", v.members)
+      + row("journal-list", "Journals", v.journalList) + row("languages", "Languages", v.languages) + "</div>" : "")
+    + '<p class="group-label">Account</p><div class="inset">'
+    + `<p class="row"><span>Signed in as</span><span class="value">${e(m.email)}</span></p>`
+    + row("pin", "Change PIN") + "</div>"
     + '<div class="inset signout"><button type="button" class="row danger" data-act="signout">Sign out</button></div>'
     + '<p class="hint">After signing out, this device remembers the email; you will only need the PIN.</p>'
     + "</section>";
+}
+
+// Titles of the settings pages
+export const SETTINGS_PAGES = {
+  journals: "My journals", fields: "Favourite fields", language: "Translation language",
+  notifications: "Notifications", digest: "Daily digest time", members: "Members",
+  "journal-list": "Journals", languages: "Languages", pin: "Change PIN",
+};
+
+// One settings page: an empty container that the app fills
+export function settingsSection(id) {
+  if (id === "pin") {
+    const pin = (name, label, auto) => `<label class="row"><span>${label}</span><input type="password" name="${name}"`
+      + ` inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="${auto}" placeholder="••••••" required></label>`;
+    return '<section class="settings"><form id="pin-form"><div class="inset">'
+      + pin("current", "Current PIN", "current-password") + pin("next", "New PIN", "new-password")
+      + pin("again", "New PIN again", "new-password") + "</div>"
+      + '<p class="msg" role="status"></p><button type="submit" class="btn primary wide">Change PIN</button></form></section>';
+  }
+  const ids = { journals: "prefs-section", fields: "prefs-section", language: "prefs-section",
+    notifications: "notify-section", digest: "digest-section", members: "members-section",
+    "journal-list": "journals-section", languages: "languages-section" };
+  return `<section class="settings"><div id="${ids[id] || "unknown-section"}">${skeleton(1)}</div></section>`;
 }
 
 // ---------- Browse ----------
@@ -617,19 +641,21 @@ function languageSelect(o) {
     + `</select>${ICONS.chevronDown}</span></label>`;
 }
 
-export function prefsSections(o) {
+// `part`: "journals", "fields" or "language" (a settings page), or all three (first-run screen)
+export function prefsSections(o, part = null) {
+  const show = (name) => !part || part === name;
   return '<form id="prefs-form">'
-    + '<p class="group-label">My journals</p>'
-    + `<div class="inset">${journalChecks(o) || '<p class="row"><span>No journals yet.</span></p>'}</div>`
-    + '<p class="hint">Today, the calendar, Browse, notifications and the badge show only these journals. '
-    + "Paused journals are not collected for now.</p>"
-    + '<p class="group-label">Favourite fields</p>'
-    + `<div class="inset">${fieldChecks(o)}</div>`
-    + '<p class="hint">Listed first on Today and marked ★.</p>'
-    + '<p class="group-label">Translation language</p>'
-    + `<div class="inset">${languageSelect(o)}</div>`
-    + '<p class="hint">New papers in your journals get abstract translations in this language (older papers are not '
-    + "translated again). Full-text summaries you request are written in it (in English with no translation).</p>"
+    + (show("journals") ? (part ? "" : '<p class="group-label">My journals</p>')
+      + `<div class="inset">${journalChecks(o) || '<p class="row"><span>No journals yet.</span></p>'}</div>`
+      + '<p class="hint">Today, the calendar, Browse, notifications and the badge show only these journals. '
+      + "Paused journals are not collected for now.</p>" : "")
+    + (show("fields") ? (part ? "" : '<p class="group-label">Favourite fields</p>')
+      + `<div class="inset">${fieldChecks(o)}</div>`
+      + '<p class="hint">Listed first on Today and marked ★.</p>' : "")
+    + (show("language") ? (part ? "" : '<p class="group-label">Translation language</p>')
+      + `<div class="inset">${languageSelect(o)}</div>`
+      + '<p class="hint">New papers in your journals get abstract translations in this language (older papers are not '
+      + "translated again). Full-text summaries you request are written in it (in English with no translation).</p>" : "")
     + "</form>";
 }
 
@@ -662,8 +688,7 @@ export function journalsAdmin(o) {
     + `<span class="row-meta">${e(s.issns.join(", ") || "no ISSN")}${s.publisher ? ` · ${e(s.publisher)}` : ""} · ${s.works} works</span></span></button>`
   )).join("");
   const picked = o.picked;
-  return '<p class="group-label">Journals</p>'
-    + `<div class="members">${rows}</div>`
+  return `<div class="members">${rows}</div>`
     + `<p class="hint">"Following" counts active users, updated every hour${o.usageAt ? ` (last ${e(o.usageAt.slice(0, 16).replace("T", " "))})` : ""}. `
     + "Paused journals are skipped by the morning run; deleting does not remove papers already collected.</p>"
     + '<p class="group-label">Add a journal</p>'
@@ -688,8 +713,7 @@ export function languagesAdmin(o) {
     + '<button type="button" class="btn link danger" data-act="language-remove">Remove</button></div>'
   )).join("");
   const left = o.choices.filter(([code]) => !o.languages[code]);
-  return '<p class="group-label">Languages</p>'
-    + `<div class="inset">${rows || '<p class="row"><span>No languages: abstracts are not translated.</span></p>'}</div>`
+  return `<div class="inset">${rows || '<p class="row"><span>No languages: abstracts are not translated.</span></p>'}</div>`
     + (left.length ? '<form id="language-add"><div class="inset"><label class="row"><span>Add</span><span class="select inline"><select name="code">'
       + left.map(([code, name]) => `<option value="${e(code)}">${e(name)}</option>`).join("")
       + `</select>${ICONS.chevronDown}</span></label></div><button type="submit" class="btn wide">Add language</button></form>` : "")

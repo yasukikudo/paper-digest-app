@@ -317,6 +317,7 @@ function route() {
   else if (hash === "#/browse") showBrowse();
   else if (hash === "#/library") showLibrary();
   else if (hash === "#/settings") showSettings();
+  else if (hash.startsWith("#/settings/")) showSettingsSection(hash.slice("#/settings/".length));
   else showDay(null);
 }
 
@@ -585,7 +586,8 @@ content.addEventListener("keydown", (ev) => {
 async function showPaper(key) {
   const navigation = state.navigation;
   state.page = "paper";
-  const bar = { title: "Paper", back: state.previousHash.startsWith("#/day/") ? "Digest" : "Browse" };
+  const bar = { title: "Paper", back: "Browse" };
+  state.backHash = "#/browse";
   showLoading("browse", bar);
   try {
     const [paper] = await data.getMany("papers", [key], state.papers);
@@ -853,8 +855,9 @@ appbar.addEventListener("click", (ev) => {
     else openCalendar();
   }
   if (button?.dataset.act === "back") {
-    if (state.previousHash && state.previousHash !== currentHash) history.back();
-    else location.hash = "#/browse";
+    const target = state.backHash || "#/browse";
+    if (state.previousHash === target) history.back();
+    else location.hash = target;
   }
 });
 
@@ -953,30 +956,81 @@ noteSheet.addEventListener("click", (ev) => {
 // Defaults when settings/app does not exist yet (the repository's settings.yaml values)
 const DEFAULT_DIGEST = { digest_time: "05:00", timezone: "America/Los_Angeles" };
 
+const ADMIN_PAGES = new Set(["digest", "members", "journal-list", "languages"]);
+const NOTIFY_LABELS = { enabled: "On", off: "Off", blocked: "Blocked", unsupported: "Not supported", "ios-browser": "Home Screen app only" };
+
+// Settings: a list of items with their current values; each opens its own page
 async function showSettings() {
   const navigation = state.navigation;
   state.page = "settings";
+  state.settingsSection = null;
   document.title = "Settings";
-  show("settings", { title: "Settings" }, view.settingsPage(state.user.email));
-  bindPinForm();
+  const admin = state.me?.role === "admin";
+  const menu = (values) => view.settingsMenu({ email: state.user.email, admin, values });
+  show("settings", { title: "Settings" }, menu({}));
   try {
-    const [saved, choices] = await Promise.all([data.getAppSettings(), data.getNotifyChoices(), ensureCalendar(true)]);
-    if (navigation !== state.navigation) return;
-    const current = saved || DEFAULT_DIGEST;
-    state.appSettings = current;
-    state.notifyChoices = choices;
-    if (state.me?.role === "admin") renderDigest(current.digest_time, current.timezone, Boolean(saved));
-    renderPrefs();
-    await renderNotify();
-    if (state.me?.role === "admin") {
-      await renderMembers();
-      await renderJournals();
-      renderLanguages();
+    const chosen = state.prefs?.journals || [...state.journals.keys()];
+    const fieldNames = new Map(DEFAULT_FIELDS.map((f) => [f.id, f.name]));
+    const favs = (state.prefs?.fields || []).map((f) => fieldNames.get(f) || f);
+    const values = {
+      journals: `${chosen.filter((id) => state.journals.has(id)).length} of ${state.journals.size}`,
+      fields: favs.length ? (favs.length > 1 ? `${favs.length} fields` : favs[0]) : "None",
+      language: state.languages[state.prefs?.language] || "None",
+      notifications: NOTIFY_LABELS[await push.status()] || "",
+    };
+    if (admin) {
+      const [app, people] = await Promise.all([data.getAppSettings(), data.listUsers()]);
+      const s = app || DEFAULT_DIGEST;
+      state.appSettings = s;
+      const time = schedule.timeOptions().find(([v]) => v === s.digest_time)?.[1] || s.digest_time;
+      values.digest = `${time} · ${s.timezone.split("/").pop().replace(/_/g, " ")}`;
+      const active = [...people.values()].filter((u) => u.active).length;
+      values.members = `${active} active`;
+      const paused = [...state.journals.values()].filter((j) => !j.active).length;
+      values.journalList = `${state.journals.size}${paused ? ` · ${paused} paused` : ""}`;
+      values.languages = Object.values(state.languages).sort().join(", ") || "None";
+    }
+    if (navigation === state.navigation) {
+      const y = content.scrollTop;
+      content.innerHTML = menu(values);
+      content.scrollTop = y;
     }
   } catch (err) {
-    if (navigation === state.navigation) {
-      content.querySelector("#digest-section").innerHTML = `<p class="msg">Could not load the digest time. ${view.e(errorText(err))}</p>`;
-    }
+    toast(`Could not load the settings: ${errorText(err)}`, "error");
+  }
+}
+
+async function showSettingsSection(id) {
+  const navigation = state.navigation;
+  const admin = state.me?.role === "admin";
+  if (!view.SETTINGS_PAGES[id] || (ADMIN_PAGES.has(id) && !admin)) {
+    location.hash = "#/settings";
+    return;
+  }
+  state.page = "settings";
+  state.settingsSection = id;
+  state.backHash = "#/settings";
+  document.title = view.SETTINGS_PAGES[id];
+  show("settings", { title: view.SETTINGS_PAGES[id], back: "Settings" }, view.settingsSection(id));
+  try {
+    if (id === "pin") bindPinForm();
+    else if (["journals", "fields", "language"].includes(id)) renderPrefs();
+    else if (id === "notifications") {
+      state.notifyChoices = await data.getNotifyChoices();
+      if (navigation === state.navigation) await renderNotify();
+    } else if (id === "digest") {
+      const [saved] = await Promise.all([data.getAppSettings(), ensureCalendar(true)]);
+      if (navigation !== state.navigation) return;
+      const current = saved || DEFAULT_DIGEST;
+      state.appSettings = current;
+      renderDigest(current.digest_time, current.timezone, Boolean(saved));
+    } else if (id === "members") {
+      if (!state.appSettings) state.appSettings = (await data.getAppSettings()) || DEFAULT_DIGEST;
+      await renderMembers();
+    } else if (id === "journal-list") await renderJournals();
+    else if (id === "languages") renderLanguages();
+  } catch (err) {
+    if (navigation === state.navigation) toast(`Could not load: ${errorText(err)}`, "error");
   }
 }
 
@@ -1089,9 +1143,15 @@ function prefsOptions(chosen) {
   };
 }
 
+// The choices on a form; parts not on it (a settings page shows one part) keep their saved value
 function readPrefs(form) {
+  const has = (name) => form.querySelector(`[name="${name}"]`);
   const checked = (name) => [...form.querySelectorAll(`input[name="${name}"]:checked`)].map((i) => i.value);
-  return { journals: checked("journal"), fields: checked("field"), language: form.elements.language.value || null };
+  return {
+    journals: has("journal") ? checked("journal") : (state.prefs?.journals || [...state.journals.keys()]),
+    fields: has("field") ? checked("field") : (state.prefs?.fields || []),
+    language: has("language") ? (form.elements.language.value || null) : (state.prefs?.language ?? null),
+  };
 }
 
 function showOnboarding() {
@@ -1126,7 +1186,9 @@ content.addEventListener("click", async (ev) => {
 
 function renderPrefs() {
   const section = content.querySelector("#prefs-section");
-  if (section) section.innerHTML = view.prefsSections(prefsOptions(state.prefs || {}));
+  const part = ["journals", "fields", "language"].includes(state.settingsSection) ? state.settingsSection : null;
+  const saved = state.prefs || { journals: [...state.journals.keys()] };
+  if (section) section.innerHTML = view.prefsSections(prefsOptions(saved), part);
 }
 
 // Settings: changes to journals, fields or language are saved at once
