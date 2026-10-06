@@ -18,7 +18,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 export const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);   // stays signed in on this device until sign-out
@@ -173,6 +173,22 @@ export async function getAppSettings() {
 export function saveAppSettings(digestTime, timezone) {
   return setDoc(doc(db, "settings", "app"), { digest_time: digestTime, timezone, updated_at: isoNow() }, { merge: true });
 }
+
+// ---------- Estimated API costs (admins only) ----------
+
+// costs/{YYYY-MM-DD} from `from` on: Map date → document (costs/alerts has no date and is left out)
+export async function listCosts(from) {
+  const snap = await getDocs(query(collection(db, "costs"), where("date", ">=", from)));
+  return new Map(snap.docs.map((d) => [d.id, d.data()]));
+}
+
+// settings/costs: {monthly_budget_usd} (null if never set)
+export async function getCostSettings() {
+  const snap = await getDoc(doc(db, "settings", "costs"));
+  return snap.exists() ? snap.data() : null;
+}
+
+export const saveBudget = (usd) => setDoc(doc(db, "settings", "costs"), { monthly_budget_usd: usd, updated_at: isoNow() });
 
 // ---------- This user's settings: notifications and what has been seen ----------
 

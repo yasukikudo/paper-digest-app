@@ -658,6 +658,45 @@ a.menu-row:active { background: var(--chip); }
 .menu-end .value { max-width: 13rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-end .icon { width: 16px; height: 16px; flex: none; color: var(--muted); }
 
+/* ---------- Costs (admins) ---------- */
+.cost-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: .75rem; }
+.cost-card {
+  display: flex; flex-direction: column; gap: .15rem; padding: 12px 14px;
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.cost-card span { color: var(--muted); font-size: .72rem; font-weight: 500; }
+.cost-card b { font-size: 1.45rem; font-weight: 650; letter-spacing: -.01em; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.chart-head { display: flex; justify-content: flex-end; margin: 1.25rem 0 .5rem; }
+.chart-box { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px 12px 6px; }
+.cost-chart { display: block; width: 100%; height: 160px; overflow: visible; }
+.cost-chart .base { stroke: var(--line); stroke-width: 1; }
+.cost-chart .hit { fill: transparent; }
+.cost-chart .val { fill: var(--link); opacity: .75; }
+.cost-chart .est { fill: var(--link); opacity: .3; }
+.cost-chart .bar { cursor: pointer; outline: none; }
+.cost-chart .bar:hover .hit, .cost-chart .bar:focus-visible .hit { fill: var(--chip); }
+.cost-chart .bar.on .hit { fill: color-mix(in srgb, var(--link) 10%, transparent); }
+.cost-chart .bar.on .val { opacity: 1; }
+.chart-labels { position: relative; height: 1.3rem; margin-top: 4px; }
+.chart-labels span {
+  position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap;
+  color: var(--muted); font-size: .66rem; font-variant-numeric: tabular-nums;
+}
+.chart-labels span:last-child { transform: translateX(-100%); }
+.row.cost-row > span:first-child { flex: 1; min-width: 0; white-space: normal; }
+.row.cost-row > .value { flex: none; font-variant-numeric: tabular-nums; }
+.chart-scale { color: var(--muted); font-size: .68rem; text-align: right; margin-top: .1rem; }
+.model-row { flex-wrap: wrap; gap: .25rem 1rem; padding-top: .5rem; padding-bottom: .5rem; }
+.model-row .value { white-space: normal; }
+.meter { position: relative; height: 10px; margin: .9rem 16px .3rem; border-radius: 999px; background: var(--chip); }
+.meter .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: var(--ok); }
+.meter.near .fill { background: var(--accent); }
+.meter.over .fill { background: var(--danger); }
+.meter .tick { position: absolute; top: -3px; bottom: -3px; width: 1.5px; margin-left: -.75px; background: var(--muted); }
+.meter-text { color: var(--muted); font-size: .76rem; margin: 0 16px; }
+.meter-text b { color: var(--text); }
+.hint.fine { font-size: .7rem; margin-top: 1.25rem; }
+
 /* ---------- Motion (stopped when the device asks for reduced motion) ---------- */
 .content.enter > * { animation: enter .24s var(--ease); }
 @keyframes enter { from { opacity: 0; transform: translateY(6px); } }

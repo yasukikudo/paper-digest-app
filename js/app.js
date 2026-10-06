@@ -8,6 +8,7 @@ import * as view from "./render.js";
 import { DEFAULT_FIELDS, STATUSES } from "./labels.js";
 import * as schedule from "./schedule.js";
 import * as push from "./push.js";
+import * as costView from "./costs.js";
 
 const content = document.getElementById("content");
 const appbar = document.getElementById("appbar");
@@ -1027,7 +1028,7 @@ noteSheet.addEventListener("click", (ev) => {
 // Defaults when settings/app does not exist yet (the repository's settings.yaml values)
 const DEFAULT_DIGEST = { digest_time: "05:00", timezone: "America/Chicago" };
 
-const ADMIN_PAGES = new Set(["digest", "members", "journal-list", "languages"]);
+const ADMIN_PAGES = new Set(["digest", "members", "journal-list", "languages", "costs"]);
 const NOTIFY_LABELS = { enabled: "On", off: "Off", blocked: "Blocked", unsupported: "Not supported", "ios-browser": "Home Screen app only" };
 
 // Settings: a list of items with their current values; each opens its own page
@@ -1060,6 +1061,9 @@ async function showSettings() {
       const paused = [...state.journals.values()].filter((j) => !j.active).length;
       values.journalList = `${state.journals.size}${paused ? ` · ${paused} paused` : ""}`;
       values.languages = Object.values(state.languages).sort().join(", ") || "None";
+      const today = costView.todayIn(s.timezone);
+      const month = await data.listCosts(`${today.slice(0, 7)}-01`).catch(() => null);
+      if (month) values.costs = `${costView.usd([...month.values()].reduce((n, d) => n + (d.total_usd || 0), 0))} this month`;
     }
     if (navigation === state.navigation) {
       const y = content.scrollTop;
@@ -1100,6 +1104,7 @@ async function showSettingsSection(id) {
       await renderMembers();
     } else if (id === "journal-list") await renderJournals();
     else if (id === "languages") renderLanguages();
+    else if (id === "costs") await loadCosts(navigation);
   } catch (err) {
     if (navigation === state.navigation) toast(`Could not load: ${errorText(err)}`, "error");
   }
@@ -1412,6 +1417,70 @@ content.addEventListener("submit", async (ev) => {
     } catch (err) {
       toast(`Could not save: ${errorText(err)}`, "error");
     }
+  }
+});
+
+// ---------- Costs (admins) ----------
+
+async function loadCosts(navigation) {
+  if (!state.appSettings) state.appSettings = (await data.getAppSettings()) || DEFAULT_DIGEST;
+  const today = costView.todayIn(state.appSettings.timezone);
+  const [docs, settings, people] = await Promise.all([
+    data.listCosts(costView.firstNeeded(today)), data.getCostSettings(), data.listUsers()]);
+  if (navigation !== state.navigation) return;
+  const period = state.costs?.period || "day";
+  state.costs = {
+    docs, today, period, selected: costView.keyOf(period, today),
+    budget: settings?.monthly_budget_usd ?? null,
+    names: new Map([...people].map(([uid, u]) => [uid, u.display_name || uid])),
+  };
+  renderCosts();
+}
+
+function renderCosts() {
+  const section = content.querySelector("#costs-section");
+  if (section && state.costs) section.innerHTML = costView.costsPage(state.costs);
+}
+
+content.addEventListener("click", (ev) => {
+  if (state.page !== "settings" || state.settingsSection !== "costs" || !state.costs) return;
+  const period = ev.target.closest("[data-cost-period]");
+  const bar = ev.target.closest("[data-cost-key]");
+  if (period) {
+    state.costs.period = period.dataset.costPeriod;
+    state.costs.selected = costView.keyOf(state.costs.period, state.costs.today);
+  } else if (bar) {
+    state.costs.selected = bar.dataset.costKey;
+  } else return;
+  const y = content.scrollTop;
+  renderCosts();
+  content.scrollTop = y;
+});
+
+content.addEventListener("keydown", (ev) => {
+  if ((ev.key === "Enter" || ev.key === " ") && ev.target.matches?.("[data-cost-key]")) {
+    ev.preventDefault();
+    ev.target.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  }
+});
+
+content.addEventListener("submit", async (ev) => {
+  if (ev.target.id !== "budget-form") return;
+  ev.preventDefault();
+  const msg = ev.target.querySelector(".msg");
+  const raw = ev.target.elements.budget.value.trim();
+  const value = raw === "" ? null : Number(raw);
+  if (value !== null && (!Number.isFinite(value) || value < 0 || value > 100000)) {
+    msg.textContent = "Enter an amount from 0 to 100000, or leave it empty for none.";
+    return;
+  }
+  try {
+    await data.saveBudget(value);
+    state.costs.budget = value;
+    renderCosts();
+    toast(value ? `Budget set to ${costView.usd(value)} a month` : "Budget removed");
+  } catch (err) {
+    msg.textContent = `Could not save: ${errorText(err)}`;
   }
 });
 
