@@ -16,6 +16,9 @@ const noteSheet = document.getElementById("note-sheet");
 const calSheet = document.getElementById("cal-sheet");
 const calPop = document.getElementById("cal-pop");
 const calSide = document.getElementById("cal-side");
+const sideNav = document.getElementById("side-nav");
+const sideToc = document.getElementById("side-toc-box");
+const VIEW_KEY = "paper-digest.day-view";   // "cards" or "compact", remembered on this device
 const backdrop = document.getElementById("sheet-backdrop");
 const EMAIL_KEY = "paper-digest.email";
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
@@ -153,11 +156,12 @@ function show(tab, bar, html, { keepScroll = false, scrollTo = 0 } = {}) {
     void content.offsetWidth;   // restart the animation
     content.classList.add("enter");
   }
-  for (const el of tabbar.querySelectorAll("[data-tab]")) {
+  for (const el of [...tabbar.querySelectorAll("[data-tab]"), ...sideNav.querySelectorAll("[data-tab]")]) {
     if (el.dataset.tab === tab) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
   }
   document.body.classList.toggle("page-day", state.page === "day");
+  if (state.page !== "day") sideToc.innerHTML = "";
 }
 
 function showLoading(tab, bar) {
@@ -259,6 +263,7 @@ function applyPrefs() {
     favFields: new Set(state.prefs?.fields || []),
     language: state.prefs?.language && state.languages[state.prefs.language] ? state.prefs.language : null,
     languageNames: state.languages,
+    fieldNames: new Map(DEFAULT_FIELDS.map((f) => [f.id, f.name])),
   });
   viewCalendar();
 }
@@ -378,9 +383,11 @@ async function showDay(date) {
     }
     const bar = {
       date,
+      today: today(),
       prev: cal.dates.filter((d) => d < date).at(-1),
       next: cal.dates.find((d) => d > date),
     };
+    state.dayBar = bar;
     appbar.innerHTML = view.appBar(bar);
     const day = await data.getDay(date);
     if (navigation !== state.navigation) return;
@@ -403,7 +410,8 @@ async function showDay(date) {
     const threshold = day.highlight_threshold ?? 7;
     const mineDay = { ...day, paper_count: papers.length,
       highlight_count: papers.filter((p) => (p.relevance ?? 0) >= threshold).length };
-    show("today", bar, view.dayPage(mineDay, papers, fields, stateOf));
+    state.dayView = { day: mineDay, papers, fields };
+    renderDayView(bar);
     document.title = `Paper digest ${date}`;
     markDaySeen(date);
   } catch (err) {
@@ -419,6 +427,45 @@ function calendarHtml() {
   const month = state.calMonth || (state.day || today()).slice(0, 7);
   return view.calendar(month, state.calendar?.days || {}, state.day, today());
 }
+
+// The day's papers as cards or compact rows, and its fields in the sidebar (wide screens)
+function renderDayView(bar = state.dayBar, keepScroll = false) {
+  const { day, papers, fields } = state.dayView;
+  const compact = storageGet(VIEW_KEY) === "compact";
+  show("today", bar, view.dayPage(day, papers, fields, stateOf, compact), { keepScroll });
+  sideToc.innerHTML = view.sideToc(view.groupPapers(papers, fields));
+  markCurrentField();
+}
+
+// The field whose heading is at the top of the page (highlighted in the sidebar)
+function markCurrentField() {
+  const links = sideToc.querySelectorAll("[data-jump]");
+  if (!links.length) return;
+  const top = content.getBoundingClientRect().top + parseFloat(getComputedStyle(content).paddingTop) + 24;
+  let current = null;
+  for (const group of content.querySelectorAll(".group[id]")) {
+    if (group.getBoundingClientRect().top <= top) current = group.id;
+  }
+  current = current || content.querySelector(".group[id]")?.id;
+  links.forEach((a) => (a.dataset.jump === current ? a.setAttribute("aria-current", "true") : a.removeAttribute("aria-current")));
+}
+
+let spyFrame = 0;
+content.addEventListener("scroll", () => {
+  if (state.page !== "day") return;
+  cancelAnimationFrame(spyFrame);
+  spyFrame = requestAnimationFrame(markCurrentField);
+}, { passive: true });
+
+sideToc.addEventListener("click", (ev) => {
+  const jump = ev.target.closest("[data-jump]");
+  if (!jump) return;
+  ev.preventDefault();
+  document.getElementById(jump.dataset.jump)?.scrollIntoView({ behavior: motion() });
+});
+
+function storageGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
+function storageSet(key, value) { try { localStorage.setItem(key, value); } catch { /* not available */ } }
 
 function renderSide() {
   calSide.innerHTML = state.calendar ? calendarHtml() : "";
@@ -710,8 +757,10 @@ function unseenFulltext() {
 function updateIndicators() {
   const days = unseenDays();
   const papers = days.reduce((n, d) => n + (state.calendar?.days?.[d]?.papers || 0), 0);
-  tabbar.querySelector('[data-tab="today"]').classList.toggle("has-dot", days.length > 0);
-  tabbar.querySelector('[data-tab="library"]').classList.toggle("has-dot", state.user ? unseenFulltext() : false);
+  for (const nav of [tabbar, sideNav]) {
+    nav.querySelector('[data-tab="today"]').classList.toggle("has-dot", days.length > 0);
+    nav.querySelector('[data-tab="library"]').classList.toggle("has-dot", state.user ? unseenFulltext() : false);
+  }
   push.setBadge(state.user ? papers : 0);
 }
 
@@ -744,18 +793,19 @@ function refreshCards() {
     const paper = state.papers.get(key) || { doi_key: key };
     const s = stateOf(key);
     const slot = (name) => card.querySelector(`[data-slot="${name}"]`);
-    slot("badges").innerHTML = view.cardBadges(card, s.entry);
+    slot("meta").innerHTML = view.cardMeta(paper, s.entry, { library: Boolean(card.dataset.library) });
     slot("actions").innerHTML = view.actions(paper, s.entry, s.request, s.busy);
     slot("notes").innerHTML = view.notesList(s.entry);
     const ft = s.entry?.fulltext;
-    const signature = ft ? `${ft.created_at}|${ft.source}` : "";
+    const signature = ft ? `${ft.created_at}|${ft.source}|${ft.language}` : "";
     const ftSlot = slot("fulltext");
     if ((ftSlot.dataset.signature || "") !== signature) {
-      ftSlot.innerHTML = view.fulltextPanel(s.entry);
+      ftSlot.innerHTML = view.fulltextBody(s.entry);
       ftSlot.dataset.signature = signature;
+      card.querySelector('[role="tab"][data-tab="ft"]').hidden = !ft;
     }
     const oneLiner = slot("oneliner");
-    if (oneLiner) {
+    if (oneLiner && card.dataset.library) {
       const text = ft?.one_liner || paper.one_liner;
       oneLiner.innerHTML = text ? `<p class="oneliner"${view.lang(text)}>${view.e(text)}</p>` : "";
     }
@@ -871,21 +921,50 @@ tabbar.addEventListener("click", (ev) => {
 });
 
 // Author details are loaded when the Authors panel is first opened
-async function loadAuthors(details) {
-  if (details.dataset.loaded) return;
-  const paper = state.papers.get(details.closest("[data-key]").dataset.key);
+async function loadAuthors(pane) {
+  if (!pane || pane.dataset.loaded) return;
+  const paper = state.papers.get(pane.closest("[data-key]").dataset.key);
   if (!paper) return;
-  details.dataset.loaded = "1";
+  pane.dataset.loaded = "1";
   const ids = (paper.authorships || []).map((a) => a.author_id).filter(Boolean);
   try {
     await data.getMany("authors", ids, state.authors);
   } catch { /* names and affiliations are shown without the numbers */ }
-  details.querySelector(".panel").innerHTML = view.authorsBody(paper, state.authors);
+  pane.innerHTML = view.authorsBody(paper, state.authors);
 }
 
+// Opening "Details" shows the selected tab (authors are loaded when their tab is shown)
 content.addEventListener("toggle", (ev) => {
-  if (ev.target.matches?.("details[data-authors]") && ev.target.open) loadAuthors(ev.target);
+  const details = ev.target;
+  if (!details.matches?.("details.more") || !details.open) return;
+  const pane = details.querySelector(".pane:not([hidden])");
+  if (pane?.dataset.pane === "au") loadAuthors(pane);
 }, true);
+
+// Tabs inside "Details"; the Cards / Compact switch; opening a compact row
+content.addEventListener("click", (ev) => {
+  const tab = ev.target.closest('[role="tab"][data-tab]');
+  if (tab) {
+    const details = tab.closest("details");
+    for (const b of details.querySelectorAll('[role="tab"]')) b.setAttribute("aria-selected", String(b === tab));
+    for (const pane of details.querySelectorAll(".pane")) pane.hidden = pane.dataset.pane !== tab.dataset.tab;
+    if (tab.dataset.tab === "au") loadAuthors(details.querySelector('[data-pane="au"]'));
+    return;
+  }
+  const mode = ev.target.closest('[data-act="view-mode"]');
+  if (mode && state.dayView) {
+    storageSet(VIEW_KEY, mode.dataset.mode);
+    renderDayView(state.dayBar, true);
+    return;
+  }
+  const row = ev.target.closest("[data-expand]");
+  if (row && state.dayView) {
+    const p = state.papers.get(row.dataset.expand);
+    if (!p) return;
+    const fieldNames = new Map(state.dayView.fields.map((f) => [f.id, f.name]));
+    row.outerHTML = view.dayCard(p, state.dayView.day, fieldNames, stateOf(p.doi_key));
+  }
+});
 
 // ---------- Sheets and the calendar window ----------
 
@@ -954,7 +1033,7 @@ noteSheet.addEventListener("click", (ev) => {
 // ---------- Settings ----------
 
 // Defaults when settings/app does not exist yet (the repository's settings.yaml values)
-const DEFAULT_DIGEST = { digest_time: "05:00", timezone: "America/Los_Angeles" };
+const DEFAULT_DIGEST = { digest_time: "05:00", timezone: "America/Chicago" };
 
 const ADMIN_PAGES = new Set(["digest", "members", "journal-list", "languages"]);
 const NOTIFY_LABELS = { enabled: "On", off: "Off", blocked: "Blocked", unsupported: "Not supported", "ios-browser": "Home Screen app only" };

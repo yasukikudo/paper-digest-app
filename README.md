@@ -65,11 +65,20 @@ code.
   Because library writes are transactions (confirmed only after a round trip), the app shows a
   change at once and replaces it with the stored document when the write finishes, or undoes it
   if the write fails.
-- **Layout:** a fixed top bar (date with previous / next, or the page title), one scrolling
-  content area and a fixed tab bar (Today, Browse, Library, Settings), with safe-area padding for
-  iPhone notches. Tapping the date opens a month calendar (dots on days with papers, a
-  different color for days with highlights): a bottom sheet on phones, a small window from
-  700 px, and always shown on the left of a day page from 1100 px.
+- **Layout:** a fixed top bar (date such as "Sunday, October 4" with "Today" or the year under
+  it, with previous / next; or the page title), one scrolling content area and a fixed tab bar
+  (Today, Browse, Library, Settings), with safe-area padding for iPhone notches. Tapping the
+  date opens a month calendar (dots on days with papers, a different color for days with
+  highlights): a bottom sheet on phones and a small window from 700 px. From 1100 px the tab
+  bar becomes a left sidebar with the sections, the calendar and the day's fields (the field
+  being read is marked); the sidebar and the content column are centered together.
+- **Cards:** a quiet line above the title (OA / OA · PDF needed / Full text), the title with
+  relevance dots (admins), the byline (the field is added where there is no field heading),
+  the one-liner, and one row of actions (save, To read | Read, note, request; links on the
+  right). Translation, abstract, authors and the full-text summary are tabs inside one
+  *Details* block. Names written entirely in capitals are shown in normal case. Today has a
+  Cards / Compact switch (remembered on the device in `localStorage`); tapping a compact row
+  opens its card.
 - **Browse:** with nothing entered, the journals and their paper counts; a journal, a field
   and/or search words (case-insensitive, all words must match, filtered as you type) list
   papers newest first, 150 at a time. Notes are added in a bottom sheet; short messages appear as a toast.

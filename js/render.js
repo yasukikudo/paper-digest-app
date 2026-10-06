@@ -42,37 +42,30 @@ export const plural = (n, word, words = "") => `${n} ${n === 1 ? word : (words |
 
 const shorten = (text, n) => (text.length <= n ? text : `${text.slice(0, n - 1)}…`);
 
-function details(label, body, meta = "", attrs = "") {
-  const metaHtml = meta ? `<span class="meta">${e(meta)}</span>` : "";
-  return `<details${attrs}><summary><span>${e(label)}${metaHtml}</span></summary>`
-    + `<div class="panel">${body}</div></details>`;
+// ---------- Names, bylines, labels ----------
+
+// "JESSE C. JOHNSON" -> "Jesse C. Johnson" (names that are entirely upper case only)
+export function displayName(name) {
+  const text = String(name || "");
+  if (!/[A-Z]/.test(text) || text !== text.toUpperCase()) return text;
+  return text.toLowerCase().replace(/(^|[\s\-'’.(])(\p{L})/gu, (m, sep, ch) => sep + ch.toUpperCase());
 }
 
-function badges(items) {
-  return items.map(([text, cls]) => `<li class="badge ${cls}"${lang(text)}>${e(text)}</li>`).join("");
-}
-
-function byline(p) {
+// "First Author (Affiliation) and 2 others · JOP · 2026-10-01" (· Field, where there is no heading)
+function byline(p, fieldName = "") {
   const ships = p.authorships || [];
   const names = p.authors || [];
   const parts = [];
   if (ships.length || names.length) {
     const first = ships[0] || { name: names[0], institution: null };
-    let text = first.name;
+    let text = displayName(first.name);
     if (first.institution) text += ` (${shorten(first.institution, SHORT_AFFILIATION)})`;
     const others = (p.author_count || names.length) - 1;
     if (others > 0) text += ` and ${plural(others, "other")}`;
     parts.push(text);
   }
-  parts.push(p.journal_abbr || p.journal, p.published_date);
+  parts.push(p.journal_abbr || p.journal, p.published_date, fieldName);
   return para(parts.filter(Boolean).join(" · "), "byline");
-}
-
-function links(p) {
-  const items = [];
-  if (p.url) items.push(`<a href="${e(p.url)}" target="_blank" rel="noopener">Article page</a>`);
-  if (p.oa_url) items.push(`<a href="${e(p.oa_url)}" target="_blank" rel="noopener">Open access version</a>`);
-  return items.length ? `<p class="links">${items.join("")}</p>` : "";
 }
 
 function careerText(info) {
@@ -84,22 +77,16 @@ function careerText(info) {
   return parts.join(" · ");
 }
 
-// Authors panel; its body is filled when opened (author details are loaded then)
-function authorsPanel(p) {
-  const total = p.author_count || (p.authorships || []).length;
-  if (!(p.authorships || []).length) return "";
-  return details("Authors", '<p class="more">Loading…</p>', plural(total, "author"), " data-authors");
-}
-
 export function authorsBody(p, cache) {
   const ships = p.authorships || [];
   const rows = ships.map((a) => {
     const info = cache.get(a.author_id || "") || {};
     const orcid = a.orcid || info.orcid;
-    const name = orcid ? `<a href="${e(orcid)}" target="_blank" rel="noopener">${e(a.name)}</a>` : e(a.name);
+    const shown = displayName(a.name);
+    const name = orcid ? `<a href="${e(orcid)}" target="_blank" rel="noopener">${e(shown)}</a>` : e(shown);
     const aff = [a.institution, a.country].filter(Boolean).join(", ") || "No affiliation listed";
     const career = careerText(info);
-    return `<li>${name} <span class="aff"${lang(aff)}>— ${e(aff)}</span>`
+    return `<li><span class="author-name">${name}</span> <span class="aff"${lang(aff)}>${e(aff)}</span>`
       + (career ? `<span class="career">${e(career)}</span>` : "") + "</li>";
   }).join("");
   const total = p.author_count || ships.length;
@@ -108,7 +95,8 @@ export function authorsBody(p, cache) {
   return `<ul class="authors">${rows}</ul>${more}`;
 }
 
-export function fulltextPanel(entry) {
+// The body of the Full text tab (empty if there is no summary)
+export function fulltextBody(entry) {
   const ft = entry?.fulltext;
   if (!ft) return "";
   const meta = [SOURCE_LABELS[ft.source] || ft.source, ft.language ? languageName(ft.language) : "",
@@ -122,7 +110,7 @@ export function fulltextPanel(entry) {
   } else {
     body = `<div class="markdown"${lang(ft.markdown)}>${e(ft.markdown)}</div>`;
   }
-  return details("Full-text summary", body, meta);
+  return `<p class="pane-meta">${e(meta)}</p>${body}`;
 }
 
 export function notesList(entry) {
@@ -145,19 +133,22 @@ export function latestRequest(key, requests) {
   return latest;
 }
 
-export function stateBadges(entry, withSavedDate = false) {
+// The small line above the title: full-text availability (and the saved date in the Library)
+export function cardMeta(p, entry, opts = {}) {
   const items = [];
-  if (entry?.fulltext) {
-    items.push([withSavedDate ? `Full text · ${SOURCE_LABELS[entry.fulltext.source] || ""}` : "Full text", "ft"]);
-  }
-  if (entry?.saved) items.push([withSavedDate && entry.saved_at ? `Saved ${entry.saved_at}` : "Saved", "saved"]);
-  return items;
+  if (entry?.fulltext) items.push(['<span class="ft">Full text</span>', true]);
+  else if (p.fulltext_access === "auto") items.push(["OA", false]);
+  else if (p.fulltext_access === "manual") items.push(["OA · PDF needed", false]);
+  if (opts.library && entry?.saved_at) items.push([`Saved ${e(entry.saved_at)}`, false]);
+  return items.map(([text, html]) => (html ? text : e(text))).join('<span class="sep">·</span>');
 }
 
-export function accessBadge(p) {
-  if (p.fulltext_access === "auto") return [["OA", ""]];
-  if (p.fulltext_access === "manual") return [["OA (manual download)", ""]];
-  return [];
+// Relevance (admins only): five dots and the number, next to the title
+function relevanceMeter(p) {
+  if (!viewer.admin || p.relevance === null || p.relevance === undefined) return "";
+  const filled = Math.round(p.relevance / 2);
+  const dots = Array.from({ length: 5 }, (_, i) => `<i class="${i < filled ? "on" : ""}"></i>`).join("");
+  return `<span class="rel" title="Relevance ${p.relevance} of 10" aria-label="Relevance ${p.relevance} of 10">${dots}<b>${p.relevance}</b></span>`;
 }
 
 // ---------- Icons (inline SVG, stroke-based; colored by currentColor) ----------
@@ -177,117 +168,137 @@ export const ICONS = {
   chevronRight: svg('<path d="M9.5 5.5L16 12l-6.5 6.5"/>'),
   chevronDown: svg('<path d="M6.5 9.5L12 15l5.5-5.5"/>'),
   search: svg('<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5l5 5"/>'),
+  external: svg('<path d="M13.5 4.5h6v6M19.5 4.5l-8 8"/><path d="M17.5 13.5v5a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18.5V8.5A1.5 1.5 0 0 1 6 7h5"/>'),
+  unlock: svg('<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 6.8-1.2"/><circle cx="12" cy="15.5" r="1.2" class="fill"/>'),
+  more: svg('<circle cx="6" cy="12" r="1.3" class="fill"/><circle cx="12" cy="12" r="1.3" class="fill"/><circle cx="18" cy="12" r="1.3" class="fill"/>'),
+  cards: svg('<rect x="4" y="4.5" width="16" height="6" rx="1.5"/><rect x="4" y="13.5" width="16" height="6" rx="1.5"/>'),
+  list: svg('<path d="M5 6.5h14M5 12h14M5 17.5h14"/>'),
 };
 
-// Buttons and request state under a paper
+// The row of actions under a paper: save, status, note, request; links on the right
 export function actions(p, entry, request, busy) {
   const saved = Boolean(entry?.saved);
-  const out = [];
-  out.push(saved
-    ? `<button type="button" class="btn on" data-act="unsave" aria-pressed="true">${ICONS.bookmarkFilled}<span>Saved</span></button>`
-    : `<button type="button" class="btn" data-act="save" aria-pressed="false">${ICONS.bookmark}<span>Save</span></button>`);
-  out.push('<span class="seg" role="group" aria-label="Status">' + STATUSES.map(([code, label]) => {
+  const left = [];
+  left.push(saved
+    ? `<button type="button" class="btn icon-only on" data-act="unsave" aria-pressed="true" aria-label="Saved (tap to remove)" title="Saved">${ICONS.bookmarkFilled}</button>`
+    : `<button type="button" class="btn icon-only" data-act="save" aria-pressed="false" aria-label="Save" title="Save">${ICONS.bookmark}</button>`);
+  left.push('<span class="seg" role="group" aria-label="Status">' + STATUSES.map(([code, label]) => {
     const on = saved && entry.status === code;
-    return `<button type="button" data-act="status" data-status="${code}" class="${on ? "on" : ""}"`
-      + ` aria-pressed="${on}">${code === "read" ? ICONS.read : ICONS.toRead}<span>${label}</span></button>`;
+    return `<button type="button" data-act="status" data-status="${code}" class="${on ? "on" : ""}" aria-pressed="${on}">${label}</button>`;
   }).join("") + "</span>");
-  out.push(`<button type="button" class="btn icon-only" data-act="note" aria-label="Add note">${ICONS.note}</button>`);
+  left.push(`<button type="button" class="btn icon-only" data-act="note" aria-label="Add note" title="Add note">${ICONS.note}</button>`);
 
   const active = request && (request.status === "pending" || request.status === "processing");
-  let req = "";
+  let error = "";
   if (active || (request && request.status === "done" && !entry?.hasOwnSummary)) {
-    req = `<p class="pill ${request.status}">${ICONS.clock}<span>${REQUEST_LABELS[request.status]}</span></p>`;
+    const label = { pending: "Requested", processing: "Summarizing…", done: "Done" }[request.status];
+    left.push(`<span class="pill ${request.status}" title="${e(REQUEST_LABELS[request.status])}">${ICONS.clock}<span>${label}</span></span>`);
   } else if (!entry?.hasOwnSummary && p.fulltext_access === "auto" && viewer.canRequest) {
     const failed = request?.status === "failed";
     const none = viewer.remaining === 0;
-    req = (failed ? `<p class="req-error">${ICONS.alert}<span>${REQUEST_LABELS.failed}: ${e(request.error || "no reason given")}</span></p>` : "")
-      + `<button type="button" class="btn request" data-act="request"${busy || none ? " disabled" : ""}>${ICONS.request}`
-      + `<span>${busy ? "Requesting…" : none ? "Monthly limit reached" : failed ? "Request again" : "Request full-text summary"}</span></button>`
-      + (viewer.remaining !== null && !none ? `<span class="left">${viewer.remaining} left this month</span>` : "");
-  } else if (!entry?.hasOwnSummary && p.fulltext_access === "manual" && viewer.canRequest) {
-    req = `<p class="pill manual">${ICONS.pdf}<span>PDF needed</span></p>`;
-    if (request?.status === "failed") req += `<p class="req-error">${ICONS.alert}<span>${REQUEST_LABELS.failed}: ${e(request.error || "")}</span></p>`;
+    const title = none ? "Monthly limit reached" : failed ? "Request the full-text summary again" : "Request a full-text summary"
+      + (viewer.remaining !== null ? ` (${viewer.remaining} left this month)` : "");
+    left.push(`<button type="button" class="btn icon-only request" data-act="request"${busy || none ? " disabled" : ""} aria-label="${e(title)}" title="${e(title)}">`
+      + `${ICONS.request}${viewer.remaining !== null ? `<span class="count">${viewer.remaining}</span>` : ""}</button>`);
+    if (failed) error = `<p class="req-error">${ICONS.alert}<span>${REQUEST_LABELS.failed}: ${e(request.error || "no reason given")}</span></p>`;
+  } else if (request?.status === "failed" && !entry?.hasOwnSummary) {
+    error = `<p class="req-error">${ICONS.alert}<span>${REQUEST_LABELS.failed}: ${e(request.error || "")}</span></p>`;
   }
-  return `<div class="buttons">${out.join("")}</div>${req ? `<div class="request-state">${req}</div>` : ""}`;
+  const right = [];
+  if (p.url) right.push(`<a class="btn icon-only ghost" href="${e(p.url)}" target="_blank" rel="noopener" aria-label="Article page" title="Article page">${ICONS.external}</a>`);
+  if (p.oa_url) right.push(`<a class="btn icon-only ghost" href="${e(p.oa_url)}" target="_blank" rel="noopener" aria-label="Open access version" title="Open access version">${ICONS.unlock}</a>`);
+  return `<div class="buttons"><span class="group-l">${left.join("")}</span><span class="group-r">${right.join("")}</span></div>${error}`;
 }
 
 // ---------- Cards ----------
 
-export function dayCard(p, day, fieldNames, state) {
-  const highlighted = viewer.admin && (p.relevance ?? 0) >= day.highlight_threshold;
-  const fixed = viewer.admin ? [[`Relevance ${p.relevance ?? "–"}`, ""]] : [];
-  const fav = viewer.favFields.has(p.field);
-  fixed.push([`${fav ? "★ " : ""}${fieldNames.get(p.field) || p.field || "Other"}`, fav ? "fav" : ""]);
-  if (highlighted) fixed.push(["Highlight", "hl"]);
-  fixed.push(...accessBadge(p));
+// One "Details" panel with tabs: Translation, Abstract, Authors, Full text (when there is one;
+// the line above the title says so while the card is closed)
+function detailsBlock(p, entry) {
   const translation = translationOf(p);
-  const parts = [
-    `<article class="paper${highlighted ? " highlighted" : ""}" data-key="${e(p.doi_key)}" data-fixed-badges="${e(JSON.stringify(fixed))}">`,
-    `<ul class="badges" data-slot="badges">${badges([...fixed, ...stateBadges(state.entry)])}</ul>`,
-    `<h3 class="title"><a href="${e(p.url || "")}" target="_blank" rel="noopener">${e(p.title)}</a></h3>`,
-    byline(p),
-    p.one_liner ? para(p.one_liner, "oneliner") : "",
-    highlighted && p.relevance_reason ? para(p.relevance_reason, "reason") : "",
-    `<div class="actions" data-slot="actions">${actions(p, state.entry, state.request, state.busy)}</div>`,
-    `<div data-slot="notes">${notesList(state.entry)}</div>`,
-    links(p),
-    '<div class="panels">',
-    `<div data-slot="fulltext">${fulltextPanel(state.entry)}</div>`,
-    translation
-      ? details(`Abstract translation (${languageName(viewer.language)})`,
-        `<p lang="${e(viewer.language)}">${e(translation)}</p>`) : "",
-    p.abstract ? details("Abstract (original)", `<p class="abstract-en">${e(p.abstract)}</p>`) : "",
-    authorsPanel(p),
-    "</div></article>",
-  ];
-  return parts.join("");
+  const tabs = [];
+  if (translation) tabs.push(["tr", "Translation"]);
+  if (p.abstract) tabs.push(["ab", "Abstract"]);
+  if ((p.authorships || []).length) tabs.push(["au", "Authors"]);
+  tabs.push(["ft", "Full text"]);
+  const hasFt = Boolean(entry?.fulltext);
+  const first = hasFt ? "ft" : (tabs[0][0] === "ft" ? "ft" : tabs[0][0]);
+  const tab = ([id, label]) => `<button type="button" role="tab" data-tab="${id}" aria-selected="${id === first}"`
+    + `${id === "ft" && !hasFt ? " hidden" : ""}>${label}</button>`;
+  const pane = (id, body, attrs = "") => `<div class="pane" role="tabpanel" data-pane="${id}"${id === first ? "" : " hidden"}${attrs}>${body}</div>`;
+  const total = p.author_count || (p.authorships || []).length;
+  const hints = [translation ? languageName(viewer.language) : "", (p.authorships || []).length ? plural(total, "author") : ""].filter(Boolean);
+  return '<details class="more">'
+    + `<summary><span>Details<span class="meta">${e(hints.join(" · "))}</span></span></summary>`
+    + `<div class="tabs" role="tablist">${tabs.map(tab).join("")}</div>`
+    + (translation ? pane("tr", `<p lang="${e(viewer.language)}">${e(translation)}</p>`) : "")
+    + (p.abstract ? pane("ab", `<p class="abstract-en">${e(p.abstract)}</p>`) : "")
+    + ((p.authorships || []).length ? pane("au", '<p class="more">Loading…</p>', " data-authors") : "")
+    + pane("ft", fulltextBody(entry), ' data-slot="fulltext"')
+    + "</details>";
 }
 
-export function libraryCard(p, entry, state) {
-  const fixed = accessBadge(p);
-  const oneLiner = entry.fulltext?.one_liner || p.one_liner;
+// A paper card. opts: {showField: field name to show (no heading above), library: true}
+export function card(p, state, day, opts = {}) {
+  const entry = state.entry;
+  const highlighted = viewer.admin && day && (p.relevance ?? 0) >= day.highlight_threshold;
+  const oneLiner = (opts.library && entry?.fulltext?.one_liner) || p.one_liner;
   return [
-    `<article class="paper" data-key="${e(entry.doi_key)}" data-library="1" data-fixed-badges="${e(JSON.stringify(fixed))}">`,
-    `<ul class="badges" data-slot="badges">${badges([...stateBadges(entry, true), ...fixed])}</ul>`,
-    `<h3 class="title"><a href="${e(p.url || "")}" target="_blank" rel="noopener">${e(p.title || entry.doi)}</a></h3>`,
-    byline(p),
+    `<article class="paper${highlighted ? " highlighted" : ""}" data-key="${e(p.doi_key)}"${opts.library ? ' data-library="1"' : ""}>`,
+    `<p class="card-meta" data-slot="meta">${cardMeta(p, entry, opts)}</p>`,
+    `<h3 class="title"><a href="${e(p.url || "")}" target="_blank" rel="noopener">${e(p.title)}</a>${relevanceMeter(p)}</h3>`,
+    byline(p, opts.showField || ""),
     `<div data-slot="oneliner">${oneLiner ? para(oneLiner, "oneliner") : ""}</div>`,
+    highlighted && p.relevance_reason ? para(p.relevance_reason, "reason") : "",
     `<div class="actions" data-slot="actions">${actions(p, entry, state.request, state.busy)}</div>`,
     `<div data-slot="notes">${notesList(entry)}</div>`,
-    links(p),
-    '<div class="panels">',
-    `<div data-slot="fulltext">${fulltextPanel(entry)}</div>`,
-    authorsPanel(p),
-    "</div></article>",
+    detailsBlock(p, entry),
+    "</article>",
   ].join("");
 }
 
-// Badges of a card after a library change (fixed badges + state badges)
-export function cardBadges(card, entry) {
-  const fixed = JSON.parse(card.dataset.fixedBadges || "[]");
-  return card.dataset.library ? badges([...stateBadges(entry, true), ...fixed]) : badges([...fixed, ...stateBadges(entry)]);
+export function dayCard(p, day, fieldNames, state, showField = false) {
+  return card(p, state, day, { showField: showField ? (fieldNames.get(p.field) || p.field) : "" });
+}
+
+export function libraryCard(p, entry, state) {
+  return card({ ...p, doi_key: entry.doi_key, title: p.title || entry.doi }, { ...state, entry }, null,
+    { library: true, showField: viewer.fieldNames?.get(p.field) || "" });
+}
+
+// Compact view: one line per paper (title, journal, one-liner); tapping opens its card
+export function compactRow(p, state) {
+  const saved = state.entry?.saved;
+  return `<button type="button" class="compact-row" data-expand="${e(p.doi_key)}">`
+    + `<span class="c-title">${e(p.title)}${relevanceMeter(p)}</span>`
+    + `<span class="c-meta"><b>${e(p.journal_abbr || p.journal || "")}</b>${saved ? ICONS.bookmarkFilled : ""}`
+    + `${p.one_liner ? `<span${lang(p.one_liner)}>${e(p.one_liner)}</span>` : ""}</span>`
+    + "</button>";
 }
 
 // Grey placeholder cards shown while data loads
 export function skeleton(n = 3) {
-  const card = '<div class="sk-card"><div class="sk-line w30"></div><div class="sk-line w90 tall"></div>'
+  const block = '<div class="sk-card"><div class="sk-line w30"></div><div class="sk-line w90 tall"></div>'
     + '<div class="sk-line w70 tall"></div><div class="sk-line w50"></div><div class="sk-line w100"></div>'
     + '<div class="sk-line w80"></div></div>';
-  return `<div class="skeleton" aria-busy="true" aria-label="Loading">${card.repeat(n)}</div>`;
+  return `<div class="skeleton" aria-busy="true" aria-label="Loading">${block.repeat(n)}</div>`;
 }
 
 // ---------- Top bar ----------
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August",
+  "September", "October", "November", "December"];
 
-function weekday(date) {
+// "Sunday, October 4"
+export function longDate(date) {
   const [y, m, d] = date.split("-").map(Number);
-  return WEEKDAYS[new Date(y, m - 1, d).getDay()];
+  return `${WEEKDAYS[new Date(y, m - 1, d).getDay()]}, ${MONTH_NAMES[m - 1]} ${d}`;
 }
 
 // On a day: ‹ date › (the date opens the calendar). Elsewhere: the page title, with a back
 // button on detail pages.
-export function appBar({ title, date, prev, next, back }) {
+export function appBar({ title, date, prev, next, back, today }) {
   if (date === undefined) {
     return '<div class="appbar-inner">'
       + (back ? `<button type="button" class="appbar-back" data-act="back">${ICONS.chevronLeft}<span>${e(back)}</span></button>` : "")
@@ -298,11 +309,12 @@ export function appBar({ title, date, prev, next, back }) {
   const arrow = (target, label, icon) => (target
     ? `<a class="appbar-btn" href="#/day/${target}" aria-label="${label}">${icon}</a>`
     : `<span class="appbar-btn off" aria-hidden="true">${icon}</span>`);
+  const sub = date ? (date === today ? "Today" : date.slice(0, 4)) : "";
   return '<div class="appbar-inner">'
     + arrow(prev, "Previous day", ICONS.chevronLeft)
     + '<button type="button" class="date-pick" data-act="calendar" aria-haspopup="dialog" aria-label="Open the calendar">'
-    + `<span class="date-main">${e(date || "No digest")}${ICONS.chevronDown}</span>`
-    + (date ? `<span class="date-sub">${weekday(date)}</span>` : "")
+    + `<span class="date-main">${e(date ? longDate(date) : "No digest")}${ICONS.chevronDown}</span>`
+    + (sub ? `<span class="date-sub${sub === "Today" ? " today" : ""}">${e(sub)}</span>` : "")
     + "</button>"
     + arrow(next, "Next day", ICONS.chevronRight)
     + "</div>";
@@ -349,7 +361,8 @@ export function calendar(month, days, selected, today) {
 
 // ---------- Pages ----------
 
-export function dayPage(day, papers, fieldList, stateOf) {
+// Papers of a day grouped by field: [{id, name, fav, papers}], favourite fields first
+export function groupPapers(papers, fieldList) {
   const fieldNames = new Map(fieldList.map((f) => [f.id, f.name]));
   const groups = new Map();
   for (const p of papers) {
@@ -362,25 +375,47 @@ export function dayPage(day, papers, fieldList, stateOf) {
   for (const list of groups.values()) {
     list.sort(viewer.admin ? (a, b) => (b.relevance ?? 0) - (a.relevance ?? 0) || byDate(a, b) : byDate);
   }
-  // Favourite fields first (in the usual order), then the others
   const usual = [...fieldList.map((f) => f.id).filter((f) => groups.has(f)),
     ...[...groups.keys()].filter((f) => !fieldNames.has(f))];
   const order = [...usual.filter((f) => viewer.favFields.has(f)), ...usual.filter((f) => !viewer.favFields.has(f))];
-  const name = (f) => fieldNames.get(f) || f;
-  const toc = order.map((f) => (
-    `<li><a href="#f-${e(f)}" data-jump="f-${e(f)}">${e(name(f))}<span class="n">${groups.get(f).length}</span></a></li>`
+  return order.map((f) => ({ id: f, name: fieldNames.get(f) || f, fav: viewer.favFields.has(f), papers: groups.get(f) }));
+}
+
+// The fields of the day as a vertical list (the sidebar on wide screens)
+export function sideToc(groups) {
+  if (!groups.length) return "";
+  return '<p class="side-label">On this day</p><ul class="side-toc">' + groups.map((g) => (
+    `<li><a href="#f-${e(g.id)}" data-jump="f-${e(g.id)}">${g.fav ? '<span class="star">★</span>' : ""}`
+    + `<span class="name">${e(g.name)}</span><span class="n">${g.papers.length}</span></a></li>`
+  )).join("") + "</ul>";
+}
+
+// A day: count, Cards/Compact switch, the fields (on narrow screens), groups with sticky headings
+export function dayPage(day, papers, fieldList, stateOf, compact = false) {
+  const groups = groupPapers(papers, fieldList);
+  const fieldNames = new Map(fieldList.map((f) => [f.id, f.name]));
+  const toc = groups.map((g) => (
+    `<li><a href="#f-${e(g.id)}" data-jump="f-${e(g.id)}">${g.fav ? "★ " : ""}${e(g.name)}<span class="n">${g.papers.length}</span></a></li>`
   )).join("");
-  const sections = order.map((f) => (
-    `<section class="group" id="f-${e(f)}"><h2>${e(name(f))}<span class="n">${groups.get(f).length}</span></h2>`
-    + groups.get(f).map((p) => dayCard(p, day, fieldNames, stateOf(p.doi_key))).join("") + "</section>"
+  const sections = groups.map((g) => (
+    `<section class="group${g.fav ? " fav" : ""}" id="f-${e(g.id)}"><h2>${g.fav ? '<span class="star" aria-label="Favourite field">★</span>' : ""}`
+    + `${e(g.name)}<span class="n">${g.papers.length}</span></h2>`
+    + (compact
+      ? `<div class="compact-list">${g.papers.map((p) => compactRow(p, stateOf(p.doi_key))).join("")}</div>`
+      : g.papers.map((p) => dayCard(p, day, fieldNames, stateOf(p.doi_key))).join(""))
+    + "</section>"
   )).join("");
   const failed = [...new Set((day.runs || []).flatMap((r) => r.failed_journals || []))];
   const foot = failed.length
     ? `<p class="run-note">Journals that failed to load in this day's runs: ${e(failed.join(", "))}</p>` : "";
-  return '<header class="page-head">'
+  const mode = (value, label, icon) => `<button type="button" data-act="view-mode" data-mode="${value}"`
+    + ` class="${(value === "compact") === compact ? "on" : ""}" aria-pressed="${(value === "compact") === compact}" aria-label="${label}" title="${label}">${icon}</button>`;
+  return '<header class="page-head day-head">'
     + `<p class="sub">${plural(day.paper_count ?? papers.length, "paper")}`
-    + (viewer.admin ? ` · ${plural(day.highlight_count ?? 0, "highlight")}` : "") + "</p></header>"
-    + (toc ? `<ul class="toc">${toc}</ul>` : "")
+    + (viewer.admin ? ` · ${plural(day.highlight_count ?? 0, "highlight")}` : "") + "</p>"
+    + `<span class="seg view-mode" role="group" aria-label="View">${mode("cards", "Cards", ICONS.cards)}${mode("compact", "Compact", ICONS.list)}</span>`
+    + "</header>"
+    + (toc ? `<ul class="toc day-toc">${toc}</ul>` : "")
     + (sections || '<p class="empty">No new papers.</p>') + foot;
 }
 
@@ -588,7 +623,7 @@ export function resultRows(entries, total, threshold, isSaved, more) {
   if (!total) return '<p class="empty">No matching papers.</p>';
   const rows = entries.map((x) => {
     const hl = viewer.admin && (x.relevance ?? 0) >= threshold;
-    const meta = [x.journal_abbr, x.published_date,
+    const meta = [x.journal_abbr, x.published_date, viewer.fieldNames?.get(x.field) || "",
       viewer.admin && x.relevance !== null && x.relevance !== undefined ? `Relevance ${x.relevance}` : ""]
       .filter(Boolean).join(" · ");
     return `<li><a class="row-btn" href="#/paper/${e(x.doi_key)}" data-key="${e(x.doi_key)}">`
@@ -609,7 +644,7 @@ export const digestSettings = digestSection;
 
 export function paperPage(p, ctx, fieldNames, state) {
   const days = (p.appeared_in || []).map((d) => `<a href="#/day/${e(d)}">${e(d)}</a>`).join(", ");
-  return dayCard(p, ctx, fieldNames, state)
+  return dayCard(p, ctx, fieldNames, state, true)
     + (days ? `<p class="appeared">In the digest of ${days}</p>` : "");
 }
 

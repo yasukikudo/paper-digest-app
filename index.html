@@ -23,8 +23,31 @@
   <!-- Fixed top bar: date and previous / next on a day, the page title elsewhere -->
   <header class="appbar" id="appbar"></header>
 
-  <!-- Wide screens: the month calendar stays on the left of a day page -->
-  <aside class="cal-side" id="cal-side" aria-label="Calendar"></aside>
+  <!-- Wide screens (1100 px and up): a sidebar with the sections, the calendar and the day's fields
+       (the tab bar is hidden there) -->
+  <aside class="sidebar" id="sidebar" aria-label="Navigation">
+    <p class="brand"><img src="icons/icon-192.png" alt="" width="28" height="28"><span>Paper digest</span></p>
+    <nav class="side-nav" id="side-nav" aria-label="Sections">
+      <a href="#/" data-tab="today">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/><circle cx="12" cy="15" r="1.6" class="fill"/></svg>
+        <span>Today</span>
+      </a>
+      <a href="#/browse" data-tab="browse">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5l5 5"/></svg>
+        <span>Browse</span>
+      </a>
+      <a href="#/library" data-tab="library">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4-6.5 4v-16a1 1 0 0 1 1-1z"/></svg>
+        <span>Library</span>
+      </a>
+      <a href="#/settings" data-tab="settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg>
+        <span>Settings</span>
+      </a>
+    </nav>
+    <div class="cal-side" id="cal-side" aria-label="Calendar"></div>
+    <div class="side-toc-box" id="side-toc-box"></div>
+  </aside>
 
   <!-- The only scrolling area -->
   <main class="content" id="content">
