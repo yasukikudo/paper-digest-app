@@ -561,7 +561,7 @@ export function settingsMenu(m) {
     + (m.admin ? '<p class="group-label">Administration</p><div class="inset">'
       + row("digest", "Daily digest time", v.digest) + row("members", "Members", v.members)
       + row("journal-list", "Journals", v.journalList) + row("languages", "Languages", v.languages)
-      + row("costs", "Costs", v.costs) + "</div>" : "")
+      + row("costs", "Costs", v.costs) + row("run", "Run now", v.run) + "</div>" : "")
     + '<p class="group-label">Account</p><div class="inset">'
     + `<p class="row"><span>Signed in as</span><span class="value">${e(m.email)}</span></p>`
     + row("pin", "Change PIN") + "</div>"
@@ -574,7 +574,7 @@ export function settingsMenu(m) {
 export const SETTINGS_PAGES = {
   journals: "My journals", fields: "Favourite fields", language: "Translation language",
   notifications: "Notifications", digest: "Daily digest time", members: "Members",
-  "journal-list": "Journals", languages: "Languages", costs: "Costs", pin: "Change PIN",
+  "journal-list": "Journals", languages: "Languages", costs: "Costs", run: "Run now", pin: "Change PIN",
 };
 
 // One settings page: an empty container that the app fills
@@ -589,7 +589,8 @@ export function settingsSection(id) {
   }
   const ids = { journals: "prefs-section", fields: "prefs-section", language: "prefs-section",
     notifications: "notify-section", digest: "digest-section", members: "members-section",
-    "journal-list": "journals-section", languages: "languages-section", costs: "costs-section" };
+    "journal-list": "journals-section", languages: "languages-section", costs: "costs-section",
+    run: "run-section" };
   return `<section class="settings"><div id="${ids[id] || "unknown-section"}">${skeleton(1)}</div></section>`;
 }
 

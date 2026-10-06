@@ -9,6 +9,7 @@ import { DEFAULT_FIELDS, STATUSES } from "./labels.js";
 import * as schedule from "./schedule.js";
 import * as push from "./push.js";
 import * as costView from "./costs.js";
+import * as runner from "./runner.js";
 
 const content = document.getElementById("content");
 const appbar = document.getElementById("appbar");
@@ -243,7 +244,9 @@ async function startSession(user) {
   data.getAppSettings().then((s) => {
     state.appSettings = s || DEFAULT_DIGEST;
     view.setViewer({ remaining: remainingThisMonth() });
+    maybeAutoStart();
   }).catch(() => {});
+  if (state.me?.role === "admin" && runner.active(runner.settings().run)) watchRun();
   push.registerWorker().then(() => push.refresh());
   ensureCalendar().then(updateIndicators).catch(() => {});
   route();
@@ -1028,7 +1031,7 @@ noteSheet.addEventListener("click", (ev) => {
 // Defaults when settings/app does not exist yet (the repository's settings.yaml values)
 const DEFAULT_DIGEST = { digest_time: "05:00", timezone: "America/Chicago" };
 
-const ADMIN_PAGES = new Set(["digest", "members", "journal-list", "languages", "costs"]);
+const ADMIN_PAGES = new Set(["digest", "members", "journal-list", "languages", "costs", "run"]);
 const NOTIFY_LABELS = { enabled: "On", off: "Off", blocked: "Blocked", unsupported: "Not supported", "ios-browser": "Home Screen app only" };
 
 // Settings: a list of items with their current values; each opens its own page
@@ -1064,6 +1067,7 @@ async function showSettings() {
       const today = costView.todayIn(s.timezone);
       const month = await data.listCosts(`${today.slice(0, 7)}-01`).catch(() => null);
       if (month) values.costs = `${costView.usd([...month.values()].reduce((n, d) => n + (d.total_usd || 0), 0))} this month`;
+      values.run = runner.ready() ? "Ready on this device" : "No token";
     }
     if (navigation === state.navigation) {
       const y = content.scrollTop;
@@ -1105,6 +1109,7 @@ async function showSettingsSection(id) {
     } else if (id === "journal-list") await renderJournals();
     else if (id === "languages") renderLanguages();
     else if (id === "costs") await loadCosts(navigation);
+    else if (id === "run") { renderRun(); if (runner.active(runner.settings().run)) watchRun(); }
   } catch (err) {
     if (navigation === state.navigation) toast(`Could not load: ${errorText(err)}`, "error");
   }
@@ -1484,6 +1489,126 @@ content.addEventListener("submit", async (ev) => {
   }
 });
 
+// ---------- Run now (admins; GitHub Actions started from this device) ----------
+
+let runTimer = 0;
+let runWatched = null;   // status last shown, to announce only a change to "completed"
+
+function renderRun() {
+  const section = content.querySelector("#run-section");
+  if (section) section.innerHTML = runner.page();
+}
+
+// Follow the started run every few seconds until it finishes
+function watchRun() {
+  clearTimeout(runTimer);
+  const tick = async () => {
+    let run;
+    try {
+      run = await runner.refresh();
+    } catch (err) {
+      toast(`GitHub: ${errorText(err)}`, "error");
+      renderRun();
+      return;
+    }
+    renderRun();
+    if (!run) return;
+    if (runner.active(run)) {
+      runWatched = run.status;
+      runTimer = setTimeout(tick, 8000);
+      return;
+    }
+    if (runWatched && runWatched !== "completed") {
+      const ok = run.conclusion === "success";
+      toast(`${run.kind === "digest" ? "Today's digest" : "Requests"}: ${runner.statusText(run).toLowerCase()}`, ok ? "" : "error");
+      if (ok && run.kind === "digest") reloadToday();
+    }
+    runWatched = "completed";
+  };
+  runWatched = runWatched || "started";
+  tick();
+}
+
+// After a digest run: re-read the calendar and, on a day page, show today again
+function reloadToday() {
+  ensureCalendar(true).then(() => {
+    updateIndicators();
+    renderSide();
+    if (state.page === "day") route();
+  }).catch(() => {});
+}
+
+async function startRun(kind, trigger) {
+  const run = await runner.start(kind, trigger);
+  runWatched = run.status;
+  renderRun();
+  watchRun();
+}
+
+// Opening the app (admins with a token on this device): start today's digest if the set time
+// has passed and it has not run; not again within 30 minutes
+async function maybeAutoStart() {
+  if (state.me?.role !== "admin" || !runner.mayAutoStart()) return;
+  const s = state.appSettings || DEFAULT_DIGEST;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: s.timezone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date()).map((p) => [p.type, p.value]));
+  if (`${parts.hour}:${parts.minute}` < s.digest_time) return;
+  try {
+    const day = await data.getDay(`${parts.year}-${parts.month}-${parts.day}`);
+    if ((day?.runs || []).some((r) => !r.migrated_from && (r.limit === null || r.limit === undefined))) return;
+    if (!runner.mayAutoStart()) return;
+    await startRun("digest", "app-auto");
+    toast("Today's digest was late: started it on GitHub");
+  } catch (err) {
+    toast(`Could not start today's digest: ${errorText(err)}`, "error");
+  }
+}
+
+content.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest('[data-act="run-digest"], [data-act="run-requests"], [data-act="run-forget"]');
+  if (!btn || state.page !== "settings" || state.me?.role !== "admin") return;
+  if (btn.dataset.act === "run-forget") {
+    if (!confirm("Remove the GitHub token from this device?")) return;
+    runner.removeToken();
+    clearTimeout(runTimer);
+    renderRun();
+    toast("Token removed from this device");
+    return;
+  }
+  btn.disabled = true;
+  try {
+    await startRun(btn.dataset.act === "run-digest" ? "digest" : "requests", "app");
+    toast("Started on GitHub");
+  } catch (err) {
+    toast(`Could not start: ${errorText(err)}`, "error");
+    renderRun();
+  }
+});
+
+content.addEventListener("change", (ev) => {
+  if (ev.target.matches?.('[data-act="run-auto"]')) {
+    runner.setAuto(ev.target.checked);
+    toast(ev.target.checked ? "Will start a late digest when the app opens" : "Automatic start off");
+  }
+});
+
+content.addEventListener("submit", async (ev) => {
+  if (ev.target.id !== "run-form") return;
+  ev.preventDefault();
+  const form = ev.target;
+  const msg = form.querySelector(".msg");
+  msg.className = "msg";
+  msg.textContent = "Checking with GitHub…";
+  try {
+    await runner.save(form.elements.repo.value, form.elements.token.value, form.elements.expires.value);
+    renderRun();
+    toast("Saved on this device");
+  } catch (err) {
+    msg.textContent = `Not saved: ${errorText(err)}`;
+  }
+});
+
 function renderLanguages() {
   const section = content.querySelector("#languages-section");
   if (section) section.innerHTML = view.languagesAdmin({ languages: state.languages, choices: LANGUAGE_CHOICES });
@@ -1589,7 +1714,9 @@ function bindPinForm() {
 // ---------- Start ----------
 
 // Coming back to the app after a while: the next page load re-reads the calendar and index
+// (and, for admins with a token here, today's digest is started if it is late)
 document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.user && state.appSettings) maybeAutoStart();
   if (document.visibilityState === "visible" && state.calendar && !fresh(state.calendar) && state.page === "day") {
     ensureCalendar(true).then(renderSide).catch(() => {});
   }
