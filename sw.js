@@ -24,7 +24,7 @@ self.addEventListener("push", (event) => {
   }
   const badge = data.badge === undefined || data.badge === "" ? NaN : Number(data.badge);
   event.waitUntil(Promise.all([
-    self.registration.showNotification(data.title || "Paper digest", {
+    self.registration.showNotification(data.title || "Paper Digest", {
       body: data.body || "",
       icon: "icons/icon-192.png",
       tag: data.kind || "paper-digest",

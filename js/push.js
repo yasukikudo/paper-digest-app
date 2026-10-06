@@ -106,7 +106,7 @@ export async function refresh() {
 // A notification shown by this device only (no server involved)
 export async function testNotification() {
   const reg = registration || await navigator.serviceWorker.ready;
-  await reg.showNotification("Paper digest", {
+  await reg.showNotification("Paper Digest", {
     body: "Test notification on this device", icon: "icons/icon-192.png", tag: "test", data: { url: "./#/settings" },
   });
 }

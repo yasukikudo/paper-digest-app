@@ -1,7 +1,7 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="Paper digest logo" width="112" height="112">
+  <img src="docs/logo.svg" alt="Paper Digest logo" width="112" height="112">
 </p>
-<h1 align="center">Paper digest</h1>
+<h1 align="center">Paper Digest</h1>
 <p align="center">A personal morning digest of new political science papers, readable on a phone or a desktop.</p>
 
 <p align="center">

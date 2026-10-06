@@ -440,7 +440,7 @@ export function libraryPage(groups, counts) {
 export function loginPage(email, message = "") {
   return '<section class="login">'
     + '<img class="login-icon" src="icons/icon-192.png" alt="" width="72" height="72">'
-    + '<h1>Paper digest</h1>'
+    + '<h1>Paper Digest</h1>'
     + '<form id="login-form" autocomplete="on">'
     + (email
       ? `<p class="who">${e(email)}</p><input type="email" name="email" autocomplete="username" value="${e(email)}" hidden>`
@@ -541,7 +541,7 @@ export function membersSection(m) {
 export function notRegisteredPage(email) {
   return '<section class="login">'
     + '<img class="login-icon" src="icons/icon-192.png" alt="" width="72" height="72">'
-    + '<h1>Paper digest</h1>'
+    + '<h1>Paper Digest</h1>'
     + `<p class="who">${e(email || "")}</p>`
     + '<p class="msg">This account is not registered as a user yet.</p>'
     + '<button type="button" class="btn wide" data-act="signout">Sign out</button></section>';

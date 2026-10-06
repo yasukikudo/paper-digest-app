@@ -405,7 +405,7 @@ async function showDay(date) {
       highlight_count: papers.filter((p) => (p.relevance ?? 0) >= threshold).length };
     state.dayView = { day: mineDay, papers, fields };
     renderDayView(bar);
-    document.title = `Paper digest ${date}`;
+    document.title = `Paper Digest ${date}`;
     markDaySeen(date);
   } catch (err) {
     if (navigation === state.navigation) {
