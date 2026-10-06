@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Paper digest</title>
+  <rect width="512" height="512" rx="112.64" fill="#1f2328"/>
+  <g>
+    <rect x="128" y="87.04" width="256" height="337.92" rx="25.6" fill="#fbfaf7"/>
+    <rect x="163.84" y="158.72" width="184.32" height="23.04" rx="10.24" fill="#9a4f0e"/>
+    <rect x="163.84" y="220.16" width="194.56" height="23.04" rx="10.24" fill="#5b626b"/>
+    <rect x="163.84" y="281.6" width="194.56" height="23.04" rx="10.24" fill="#5b626b"/>
+    <rect x="163.84" y="343.04" width="133.12" height="23.04" rx="10.24" fill="#5b626b"/>
+  </g>
+</svg>

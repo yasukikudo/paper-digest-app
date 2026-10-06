@@ -1,6 +1,8 @@
-# paper-digest-app
-
-A personal morning digest of new political science papers, readable on a phone or a desktop.
+<p align="center">
+  <img src="docs/logo.svg" alt="Paper digest logo" width="112" height="112">
+</p>
+<h1 align="center">Paper digest</h1>
+<p align="center">A personal morning digest of new political science papers, readable on a phone or a desktop.</p>
 
 <p align="center">
   <img src="docs/screenshots/today-phone.png" alt="Today on a phone: papers grouped by field, each with a one-line summary" width="280">
