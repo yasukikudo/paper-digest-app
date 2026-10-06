@@ -507,6 +507,21 @@ button.date-pick { border: 0; background: none; color: var(--text); font: inheri
 .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .7rem; }
 .left { font-size: .74rem; color: var(--muted); }
 
+/* ---------- Preferences, first-run screen, journals and languages ---------- */
+.check-row { cursor: pointer; }
+.check-row > span:first-child { flex: 1; min-width: 0; }
+.check-row.paused { color: var(--muted); }
+.j-abbr { display: inline-block; min-width: 3.6em; font-weight: 600; font-size: .82rem; }
+.tag { font-size: .68rem; color: var(--muted); background: var(--chip); border-radius: 999px; padding: 0 .5em; }
+.badge.fav { color: var(--link); background: color-mix(in srgb, var(--link) 12%, transparent); }
+.onboarding { padding: 1.5rem 0 3rem; }
+.onboarding h1 { font-family: var(--font-serif); font-size: 1.5rem; margin: 0; text-align: center; }
+.onboarding .sub { text-align: center; color: var(--muted); font-size: .88rem; margin: .4rem 0 .5rem; }
+.onboarding .login-icon { margin: 0 auto .75rem; border-radius: 14px; display: block; }
+.onboarding > .btn { margin-top: 1rem; }
+.journal.inactive { opacity: .65; }
+.rows.results { margin-top: .6rem; }
+
 /* ---------- Motion (stopped when the device asks for reduced motion) ---------- */
 .content.enter > * { animation: enter .24s var(--ease); }
 @keyframes enter { from { opacity: 0; transform: translateY(6px); } }

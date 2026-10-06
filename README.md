@@ -22,8 +22,21 @@ code.
   display name, active, full-text permission, monthly limit, this month's count). Other users see each
   field's papers newest first. Accounts themselves are created in the Firebase console.
 - **Shared and personal data.** Everyone reads the shared `days`, `papers`, `authors`,
-  `summaries` (full-text summaries; an existing one is shown to everyone), `meta/*`, `index/*`
-  and `settings/app`. Each user's own data is under `users/{uid}/` and only they can read it.
+  `summaries` (full-text summaries per language; an existing one is shown to everyone), `journals`,
+  `meta/*`, `index/*`, `settings/app` and `settings/languages`. Each user's own data is under
+  `users/{uid}/` and only they can read it.
+- **Journals, fields, language.** Each user follows some journals, may mark favourite fields and
+  picks a translation language (`users/{uid}/settings/prefs`; Settings, and a first-run screen
+  for new users with every journal ticked). Today, the calendar (dots and counts, from the
+  per-journal counts in `meta/calendar`), Browse (by default; "All journals" too), notifications
+  and the badge show only their journals. Favourite fields come first on Today and their papers
+  are marked ★. Abstract translations are shown in the user's language (`papers.abstract_translations`);
+  full-text summaries in their language when there is one (otherwise another language, labelled),
+  and the request button appears while there is none in their language.
+- **Admins** also keep the journal list (Settings → Journals: search OpenAlex by ISSN or name
+  from the browser, add with an abbreviation and an optional RSS address, pause, resume, delete;
+  follower counts come from `meta/journal_usage`, updated hourly) and the translation languages
+  (Settings → Languages).
 - **The app reads** the shared data, the user's own data and requests, and three kinds of light
   documents written by the scripts, so it never reads every day or paper:
   - `meta/calendar` (one read per session): papers and highlights per day, for the calendar and
@@ -37,14 +50,15 @@ code.
   - `users/{uid}/library/{doi_key}`: save / unsave, status (to read, read), notes. A missing document is
     created in the full schema shape; existing documents get only changed fields, and notes are
     added with `arrayUnion`, inside a transaction (the scripts write the same documents).
-  - `users/{uid}/settings/seen` (what has been viewed), `settings/notify` (which notifications)
-    and `push_tokens` (this device's notification token)
+  - `users/{uid}/settings/seen` (what has been viewed), `settings/notify` (which notifications),
+    `settings/prefs` (journals, fields, language) and `push_tokens` (this device's notification token)
   - `requests`: a new request with the user's `uid`, `status: "pending"` and
     `requested_by: "app"`, for papers with no shared summary whose open-access PDF can be
     downloaded automatically (`fulltext_access: "auto"`), only by users allowed full-text
     summaries; the button shows how many are left this month if there is a limit. Requesting
     also saves the paper. A paper with a waiting or running request cannot be requested again.
-  - Admins only: `users/{uid}` (members) and `settings/app` (digest time and time zone)
+  - Admins only: `users/{uid}` (members), `journals`, `settings/app` (digest time and time zone)
+    and `settings/languages`
 - Papers are always addressed by the stored `doi_key`; keys are never computed from DOIs.
 - The user's library, their requests and `meta/summaries` are watched live (`onSnapshot`), so
   saving, notes and finished full-text summaries appear without reloading. Only the affected parts of a card are redrawn.

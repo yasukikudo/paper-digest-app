@@ -10,8 +10,18 @@ import {
 // Who is looking: relevance is shown to admins only (it reflects the admin's interest profile);
 // the request button only to users allowed full-text summaries. `remaining` = summaries left
 // this month (null = no limit).
-let viewer = { admin: false, canRequest: false, remaining: null };
+// Also the user's favourite fields (listed first, papers marked), their translation language
+// and the names of the offered languages.
+let viewer = { admin: false, canRequest: false, remaining: null, favFields: new Set(), language: null, languageNames: {} };
 export const setViewer = (v) => { viewer = { ...viewer, ...v }; };
+export const languageName = (code) => viewer.languageNames[code] || LANGUAGE_NAMES[code] || (code === "en" ? "English" : code);
+
+// The paper's abstract translation in the user's language (older papers: the single Japanese one)
+function translationOf(p) {
+  const code = viewer.language;
+  if (!code) return null;
+  return (p.abstract_translations || {})[code] || (code === "ja" ? p.abstract_translation : null) || null;
+}
 
 const JAPANESE = /[぀-ヿ㐀-鿿＀-￯]/;
 const SHORT_AFFILIATION = 32;
@@ -101,11 +111,12 @@ export function authorsBody(p, cache) {
 export function fulltextPanel(entry) {
   const ft = entry?.fulltext;
   if (!ft) return "";
-  const meta = `${SOURCE_LABELS[ft.source] || ft.source} · ${(ft.created_at || "").slice(0, 10)}`;
+  const meta = [SOURCE_LABELS[ft.source] || ft.source, ft.language ? languageName(ft.language) : "",
+    (ft.created_at || "").slice(0, 10)].filter(Boolean).join(" · ");
   let body;
   if (ft.sections) {
     body = '<dl class="sections">' + SECTION_LABELS.filter(([key]) => ft.sections[key])
-      .map(([key, label]) => `<dt>${label}</dt><dd${lang(ft.sections[key])}>${e(ft.sections[key])}</dd>`)
+      .map(([key, label]) => `<dt>${label}</dt><dd${ft.language ? ` lang="${e(ft.language)}"` : lang(ft.sections[key])}>${e(ft.sections[key])}</dd>`)
       .join("") + "</dl>";
     if (ft.one_liner) body = `<p class="ft-oneliner"${lang(ft.one_liner)}>${e(ft.one_liner)}</p>` + body;
   } else {
@@ -184,16 +195,16 @@ export function actions(p, entry, request, busy) {
 
   const active = request && (request.status === "pending" || request.status === "processing");
   let req = "";
-  if (active || (request && request.status === "done" && !entry?.fulltext)) {
+  if (active || (request && request.status === "done" && !entry?.hasOwnSummary)) {
     req = `<p class="pill ${request.status}">${ICONS.clock}<span>${REQUEST_LABELS[request.status]}</span></p>`;
-  } else if (!entry?.fulltext && p.fulltext_access === "auto" && viewer.canRequest) {
+  } else if (!entry?.hasOwnSummary && p.fulltext_access === "auto" && viewer.canRequest) {
     const failed = request?.status === "failed";
     const none = viewer.remaining === 0;
     req = (failed ? `<p class="req-error">${ICONS.alert}<span>${REQUEST_LABELS.failed}: ${e(request.error || "no reason given")}</span></p>` : "")
       + `<button type="button" class="btn request" data-act="request"${busy || none ? " disabled" : ""}>${ICONS.request}`
       + `<span>${busy ? "Requesting…" : none ? "Monthly limit reached" : failed ? "Request again" : "Request full-text summary"}</span></button>`
       + (viewer.remaining !== null && !none ? `<span class="left">${viewer.remaining} left this month</span>` : "");
-  } else if (!entry?.fulltext && p.fulltext_access === "manual" && viewer.canRequest) {
+  } else if (!entry?.hasOwnSummary && p.fulltext_access === "manual" && viewer.canRequest) {
     req = `<p class="pill manual">${ICONS.pdf}<span>PDF needed</span></p>`;
     if (request?.status === "failed") req += `<p class="req-error">${ICONS.alert}<span>${REQUEST_LABELS.failed}: ${e(request.error || "")}</span></p>`;
   }
@@ -205,10 +216,11 @@ export function actions(p, entry, request, busy) {
 export function dayCard(p, day, fieldNames, state) {
   const highlighted = viewer.admin && (p.relevance ?? 0) >= day.highlight_threshold;
   const fixed = viewer.admin ? [[`Relevance ${p.relevance ?? "–"}`, ""]] : [];
-  fixed.push([fieldNames.get(p.field) || p.field || "Other", ""]);
+  const fav = viewer.favFields.has(p.field);
+  fixed.push([`${fav ? "★ " : ""}${fieldNames.get(p.field) || p.field || "Other"}`, fav ? "fav" : ""]);
   if (highlighted) fixed.push(["Highlight", "hl"]);
   fixed.push(...accessBadge(p));
-  const code = day.languages?.abstract_translation || "ja";
+  const translation = translationOf(p);
   const parts = [
     `<article class="paper${highlighted ? " highlighted" : ""}" data-key="${e(p.doi_key)}" data-fixed-badges="${e(JSON.stringify(fixed))}">`,
     `<ul class="badges" data-slot="badges">${badges([...fixed, ...stateBadges(state.entry)])}</ul>`,
@@ -221,8 +233,9 @@ export function dayCard(p, day, fieldNames, state) {
     links(p),
     '<div class="panels">',
     `<div data-slot="fulltext">${fulltextPanel(state.entry)}</div>`,
-    p.abstract_translation
-      ? details(`Abstract translation (${LANGUAGE_NAMES[code] || code})`, para(p.abstract_translation)) : "",
+    translation
+      ? details(`Abstract translation (${languageName(viewer.language)})`,
+        `<p lang="${e(viewer.language)}">${e(translation)}</p>`) : "",
     p.abstract ? details("Abstract (original)", `<p class="abstract-en">${e(p.abstract)}</p>`) : "",
     authorsPanel(p),
     "</div></article>",
@@ -349,8 +362,10 @@ export function dayPage(day, papers, fieldList, stateOf) {
   for (const list of groups.values()) {
     list.sort(viewer.admin ? (a, b) => (b.relevance ?? 0) - (a.relevance ?? 0) || byDate(a, b) : byDate);
   }
-  const order = [...fieldList.map((f) => f.id).filter((f) => groups.has(f)),
+  // Favourite fields first (in the usual order), then the others
+  const usual = [...fieldList.map((f) => f.id).filter((f) => groups.has(f)),
     ...[...groups.keys()].filter((f) => !fieldNames.has(f))];
+  const order = [...usual.filter((f) => viewer.favFields.has(f)), ...usual.filter((f) => !viewer.favFields.has(f))];
   const name = (f) => fieldNames.get(f) || f;
   const toc = order.map((f) => (
     `<li><a href="#f-${e(f)}" data-jump="f-${e(f)}">${e(name(f))}<span class="n">${groups.get(f).length}</span></a></li>`
@@ -500,8 +515,10 @@ export function settingsPage(email, digest = null) {
   return '<section class="settings">'
     + `<p class="group-label">Account</p><div class="inset"><p class="row"><span>Signed in as</span><span class="value">${e(email)}</span></p></div>`
     + (viewer.admin ? `<div id="digest-section">${digestSection(digest)}</div>` : "")
+    + '<div id="prefs-section"><p class="group-label">My journals</p><div class="inset"><p class="row"><span>Loading…</span></p></div></div>'
     + `<div id="notify-section">${notifySection(null)}</div>`
     + (viewer.admin ? `<div id="members-section">${membersSection(null)}</div>` : "")
+    + (viewer.admin ? '<div id="journals-section"></div><div id="languages-section"></div>' : "")
     + '<p class="group-label">Change PIN</p><form id="pin-form"><div class="inset">'
     + pin("current", "Current PIN", "current-password") + pin("next", "New PIN", "new-password")
     + pin("again", "New PIN again", "new-password") + "</div>"
@@ -521,7 +538,8 @@ export function browseBar(meta, journals, browse) {
     + ' placeholder="Search titles, authors, journals, tags" autocomplete="off" autocorrect="off" spellcheck="false"'
     + ' enterkeyhint="search" aria-label="Search papers"></label>'
     + '<div class="filters">'
-    + `<span class="select">${'<select name="journal" aria-label="Journal">'}${option("", "All journals", !browse.journal)}`
+    + `<span class="select">${'<select name="journal" aria-label="Journal">'}${option("__mine__", "My journals", browse.journal === "__mine__")}`
+    + option("", "All journals", !browse.journal)
     + journals.map((j) => option(j.abbr, `${j.abbr} · ${j.name}`, browse.journal === j.abbr)).join("")
     + `</select>${ICONS.chevronDown}</span>`
     + `<span class="select"><select name="field" aria-label="Field">${option("", "All fields", !browse.field)}`
@@ -569,4 +587,112 @@ export function paperPage(p, ctx, fieldNames, state) {
   const days = (p.appeared_in || []).map((d) => `<a href="#/day/${e(d)}">${e(d)}</a>`).join(", ");
   return dayCard(p, ctx, fieldNames, state)
     + (days ? `<p class="appeared">In the digest of ${days}</p>` : "");
+}
+
+// ---------- Preferences: journals, favourite fields, translation language ----------
+
+// The checkboxes and select shared by Settings and the first-run screen.
+// `o`: {journals: [{id, name, abbr, active}], chosenJournals: Set, fields: [{id, name}],
+//       chosenFields: Set, languages: {code: name}, language}
+function journalChecks(o) {
+  return o.journals.map((j) => (
+    `<label class="row check-row${j.active ? "" : " paused"}"><span><span class="j-abbr">${e(j.abbr)}</span> ${e(j.name)}`
+    + `${j.active ? "" : ' <span class="tag">paused</span>'}</span>`
+    + `<input type="checkbox" class="switch" name="journal" value="${e(j.id)}"${o.chosenJournals.has(j.id) ? " checked" : ""}></label>`
+  )).join("");
+}
+
+function fieldChecks(o) {
+  return o.fields.map((f) => (
+    `<label class="row check-row"><span>${e(f.name)}</span>`
+    + `<input type="checkbox" class="switch" name="field" value="${e(f.id)}"${o.chosenFields.has(f.id) ? " checked" : ""}></label>`
+  )).join("");
+}
+
+function languageSelect(o) {
+  const option = (value, label) => `<option value="${e(value)}"${(o.language || "") === value ? " selected" : ""}>${e(label)}</option>`;
+  return `<label class="row"><span>Translate abstracts into</span><span class="select inline"><select name="language">`
+    + option("", "No translation")
+    + Object.entries(o.languages).sort((a, b) => a[1].localeCompare(b[1])).map(([code, name]) => option(code, name)).join("")
+    + `</select>${ICONS.chevronDown}</span></label>`;
+}
+
+export function prefsSections(o) {
+  return '<form id="prefs-form">'
+    + '<p class="group-label">My journals</p>'
+    + `<div class="inset">${journalChecks(o) || '<p class="row"><span>No journals yet.</span></p>'}</div>`
+    + '<p class="hint">Today, the calendar, Browse, notifications and the badge show only these journals. '
+    + "Paused journals are not collected for now.</p>"
+    + '<p class="group-label">Favourite fields</p>'
+    + `<div class="inset">${fieldChecks(o)}</div>`
+    + '<p class="hint">Listed first on Today and marked ★.</p>'
+    + '<p class="group-label">Translation language</p>'
+    + `<div class="inset">${languageSelect(o)}</div>`
+    + '<p class="hint">New papers in your journals get abstract translations in this language (older papers are not '
+    + "translated again). Full-text summaries you request are written in it (in English with no translation).</p>"
+    + "</form>";
+}
+
+export function onboardingPage(o) {
+  return '<section class="onboarding">'
+    + '<img class="login-icon" src="icons/icon-192.png" alt="" width="64" height="64">'
+    + "<h1>Welcome</h1>"
+    + '<p class="sub">Choose what to follow. You can change these later in Settings.</p>'
+    + prefsSections(o)
+    + '<p class="msg" role="status"></p>'
+    + '<button type="button" class="btn primary wide" data-act="onboarding-done">Start</button>'
+    + "</section>";
+}
+
+// ---------- Admins: journals and languages ----------
+
+// `o`: {journals: [{id, name, abbr, active, issns, rss}], usage: {id: n}, usageAt, results}
+export function journalsAdmin(o) {
+  const rows = o.journals.map((j) => {
+    const n = o.usage[j.id] ?? 0;
+    return `<div class="inset journal${j.active ? "" : " inactive"}" data-journal-id="${e(j.id)}">`
+      + `<p class="row"><span class="member-name">${e(j.abbr)}</span><span class="value small">${n} following${j.active ? "" : " · paused"}</span></p>`
+      + `<p class="row"><span class="value small">${e(j.name)}${j.issns?.length ? ` · ${e(j.issns.join(", "))}` : ""}${j.rss ? " · RSS" : ""}</span></p>`
+      + `<label class="row switch-row"><span>Collect new papers</span><input type="checkbox" class="switch" data-journal-active${j.active ? " checked" : ""}></label>`
+      + `<button type="button" class="row danger" data-act="journal-delete">Delete</button>`
+      + "</div>";
+  }).join("");
+  const results = (o.results || []).map((s, i) => (
+    `<button type="button" class="row-btn result" data-result="${i}"><span class="row-main"><span class="row-title">${e(s.name)}</span>`
+    + `<span class="row-meta">${e(s.issns.join(", ") || "no ISSN")}${s.publisher ? ` · ${e(s.publisher)}` : ""} · ${s.works} works</span></span></button>`
+  )).join("");
+  const picked = o.picked;
+  return '<p class="group-label">Journals</p>'
+    + `<div class="members">${rows}</div>`
+    + `<p class="hint">"Following" counts active users, updated every hour${o.usageAt ? ` (last ${e(o.usageAt.slice(0, 16).replace("T", " "))})` : ""}. `
+    + "Paused journals are skipped by the morning run; deleting does not remove papers already collected.</p>"
+    + '<p class="group-label">Add a journal</p>'
+    + '<form id="journal-search"><div class="inset">'
+    + '<label class="row"><span>ISSN or name</span><input type="text" name="q" required autocomplete="off" placeholder="e.g. 0020-8183"></label>'
+    + '</div><button type="submit" class="btn wide">Search OpenAlex</button></form>'
+    + (results ? `<ul class="rows results">${results.replace(/<button/g, "<li><button").replace(/<\/button>/g, "</button></li>")}</ul>` : "")
+    + (o.searchNote ? `<p class="hint">${e(o.searchNote)}</p>` : "")
+    + (picked ? '<form id="journal-add"><div class="inset">'
+      + `<p class="row"><span class="value small">${e(picked.name)} · ${e(picked.issns.join(", "))}</span></p>`
+      + `<label class="row"><span>Name</span><input type="text" name="name" required maxlength="200" value="${e(picked.name)}"></label>`
+      + '<label class="row"><span>Abbreviation</span><input type="text" name="abbr" required maxlength="20" autocomplete="off" placeholder="e.g. IO"></label>'
+      + '<label class="row"><span>RSS (optional)</span><input type="text" name="rss" maxlength="500" autocomplete="off" placeholder="https://…"></label>'
+      + '</div><p class="msg" role="status"></p><button type="submit" class="btn primary wide">Add journal</button>'
+      + '<p class="hint">It is collected from the next morning run on, for users who choose it; earlier papers are not added.</p></form>' : "");
+}
+
+// `o`: {languages: {code: name}, choices: [[code, name]]}
+export function languagesAdmin(o) {
+  const rows = Object.entries(o.languages).sort((a, b) => a[1].localeCompare(b[1])).map(([code, name]) => (
+    `<div class="row" data-language="${e(code)}"><span>${e(name)} <span class="value small mono">${e(code)}</span></span>`
+    + '<button type="button" class="btn link danger" data-act="language-remove">Remove</button></div>'
+  )).join("");
+  const left = o.choices.filter(([code]) => !o.languages[code]);
+  return '<p class="group-label">Languages</p>'
+    + `<div class="inset">${rows || '<p class="row"><span>No languages: abstracts are not translated.</span></p>'}</div>`
+    + (left.length ? '<form id="language-add"><div class="inset"><label class="row"><span>Add</span><span class="select inline"><select name="code">'
+      + left.map(([code, name]) => `<option value="${e(code)}">${e(name)}</option>`).join("")
+      + `</select>${ICONS.chevronDown}</span></label></div><button type="submit" class="btn wide">Add language</button></form>` : "")
+    + '<p class="hint">Users choose one of these. New papers are translated only into languages that someone following '
+    + "the journal has chosen; existing papers are not translated again (use --translate on the Mac).</p>";
 }

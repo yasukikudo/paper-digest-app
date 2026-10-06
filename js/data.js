@@ -2,9 +2,9 @@
 // Data formats are described in schema.md in the (private) paper-digest repository.
 // Papers are always addressed by the stored doi_key; keys are never computed from DOIs.
 //
-// Shared: days, papers, authors, meta, index, summaries, settings/app.
+// Shared: days, papers, authors, meta, index, summaries, journals, settings/app, settings/languages.
 // The user list: users/{uid}. Each user's own data: users/{uid}/library, settings/seen,
-// settings/notify, push_tokens (only that user can read or write them).
+// settings/notify, settings/prefs, push_tokens (only that user can read or write them).
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
 import {
@@ -17,7 +17,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 export const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);   // stays signed in on this device until sign-out
@@ -112,6 +112,57 @@ export async function getMany(name, ids, cache) {
   const snaps = await Promise.all(wanted.map((id) => getDoc(doc(db, name, id))));
   snaps.forEach((s, i) => cache.set(wanted[i], s.exists() ? s.data() : null));
   return ids.map((id) => cache.get(id));
+}
+
+// ---------- Journals and translation languages (admins write) ----------
+
+export async function listJournals() {
+  const snap = await getDocs(collection(db, "journals"));
+  return new Map(snap.docs.map((d) => [d.id, d.data()]));
+}
+
+export function addJournal(id, { name, abbr, issnPrint, issnOnline, rss, openalexId }) {
+  return setDoc(doc(db, "journals", id), {
+    schema_version: SCHEMA_VERSION, name, abbr, issn_print: issnPrint || null, issn_online: issnOnline || null,
+    rss: rss || null, active: true, openalex_id: openalexId || null, added_at: isoNow(),
+  });
+}
+
+export const setJournalActive = (id, active) => updateDoc(doc(db, "journals", id), { active });
+export const deleteJournal = (id) => deleteDoc(doc(db, "journals", id));
+
+// {code: name}
+export async function getLanguages() {
+  const snap = await getDoc(doc(db, "settings", "languages"));
+  return snap.exists() ? snap.data().languages || {} : {};
+}
+
+export const saveLanguages = (languages) => setDoc(doc(db, "settings", "languages"), { languages, updated_at: isoNow() });
+
+// OpenAlex sources (journals) by ISSN or by name; public API, read directly from the browser
+export async function searchSources(text) {
+  const q = text.trim();
+  const issn = q.match(/^\d{4}-?\d{3}[\dXx]$/);
+  const url = issn
+    ? `https://api.openalex.org/sources?filter=issn:${q.slice(0, 4)}-${q.slice(-4).toUpperCase()}&per-page=5`
+    : `https://api.openalex.org/sources?search=${encodeURIComponent(q)}&filter=type:journal&per-page=8`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`OpenAlex answered ${res.status}`);
+  return ((await res.json()).results || []).map((s) => ({
+    id: (s.id || "").split("/").pop(), name: s.display_name, issns: s.issn || [],
+    publisher: s.host_organization_name || "", works: s.works_count || 0,
+  }));
+}
+
+// ---------- This user's preferences: journals, favourite fields, translation language ----------
+
+export async function getPrefs() {
+  const snap = await getDoc(mine("settings", "prefs"));
+  return snap.exists() ? snap.data() : null;
+}
+
+export function savePrefs({ journals, fields, language, onboarded }) {
+  return setDoc(mine("settings", "prefs"), { journals, fields, language, onboarded, updated_at: isoNow() });
 }
 
 // ---------- Shared settings (settings/app; admins write) ----------

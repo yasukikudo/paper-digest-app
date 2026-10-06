@@ -37,7 +37,7 @@ const state = {
   page: null,                // "login" | "day" | "browse" | "paper" | "library" | "settings"
   day: null,                 // the date shown on the day page
   calMonth: null,            // "YYYY-MM" shown in the calendar
-  browse: { q: "", journal: "", field: "", limit: PAGE_SIZE, scroll: 0 },
+  browse: { q: "", journal: "__mine__", field: "", limit: PAGE_SIZE, scroll: 0 },
   librarySignature: "",
   navigation: 0,             // increases on every page change; stale loads are dropped
   previousHash: "",
@@ -47,6 +47,9 @@ const state = {
   me: null,                  // this account's entry in the user list (users/{uid})
   summaryList: {},           // meta/summaries (live): doi_key → {language, created_at, source}
   summaries: new Map(),      // doi_key → shared summary document (cache)
+  prefs: null,               // users/{uid}/settings/prefs: journals, fields, language, onboarded
+  journals: new Map(),       // journals/{id} (the journals that can be followed)
+  languages: {},             // settings/languages: {code: name}
   pushBusy: false,
   unsubscribe: [],
 };
@@ -83,11 +86,33 @@ const motion = () => (reducedMotion.matches ? "auto" : "smooth");
 
 // A paper as this user sees it: their library entry, with the shared summary (if any) as
 // `fulltext` (an imported summary of their own otherwise)
+// Abbreviations of the journals this user follows (every journal if they have not chosen)
+function myAbbrs() {
+  const chosen = state.prefs?.journals;
+  const ids = Array.isArray(chosen) ? chosen : [...state.journals.keys()];
+  return new Set(ids.map((id) => state.journals.get(id)?.abbr).filter(Boolean));
+}
+
+// The language full-text summaries are made in for this user (English if none chosen)
+const summaryLanguage = () => (state.prefs?.language && state.languages[state.prefs.language] ? state.prefs.language : "en");
+
+// {code: summary} of a summaries document (documents from before schema version 11 included)
+function summaryLanguages(doc) {
+  if (!doc) return {};
+  const langs = { ...(doc.languages || {}) };
+  if (doc.sections && doc.language && !langs[doc.language]) langs[doc.language] = doc;
+  return langs;
+}
+
 function entryOf(key) {
   const entry = state.optimistic.get(key) || state.library.get(key);
-  const shared = state.summaryList[key] ? state.summaries.get(key) : null;
-  if (!shared) return entry;
-  return { ...(entry || { doi_key: key }), fulltext: shared };
+  const langs = state.summaryList[key] ? summaryLanguages(state.summaries.get(key)) : {};
+  const own = langs[summaryLanguage()];
+  const shared = own || Object.values(langs)[0];
+  // hasOwnSummary: a summary in the user's language (or an imported one) exists, so no request
+  const hasOwnSummary = Boolean(own || (entry?.fulltext && !shared));
+  if (!shared) return entry ? { ...entry, hasOwnSummary } : entry;
+  return { ...(entry || { doi_key: key }), fulltext: shared, hasOwnSummary };
 }
 
 function stateOf(key) {
@@ -192,6 +217,15 @@ async function startSession(user) {
   }
   state.me = me;
   view.setViewer({ admin: me.role === "admin", canRequest: me.fulltext_allowed === true });
+  try {
+    const [prefs, journals, languages] = await Promise.all([data.getPrefs(), data.listJournals(), data.getLanguages()]);
+    state.prefs = prefs;
+    state.journals = journals;
+    state.languages = languages;
+  } catch (err) {
+    toast(`Could not load your settings: ${errorText(err)}`, "error");
+  }
+  applyPrefs();
   document.body.classList.remove("signed-out");
   const fail = (err) => toast(`Live updates stopped: ${errorText(err)}`, "error");
   state.unsubscribe = [
@@ -219,6 +253,16 @@ async function startSession(user) {
   route();
 }
 
+// The user's preferences in the views (favourite fields, language, journals in the calendar)
+function applyPrefs() {
+  view.setViewer({
+    favFields: new Set(state.prefs?.fields || []),
+    language: state.prefs?.language && state.languages[state.prefs.language] ? state.prefs.language : null,
+    languageNames: state.languages,
+  });
+  viewCalendar();
+}
+
 function showNotRegistered() {
   state.page = "login";
   document.body.classList.add("signed-out");
@@ -238,6 +282,9 @@ function endSession() {
   state.index = null;
   state.seen = undefined;
   state.me = null;
+  state.prefs = null;
+  state.journals = new Map();
+  state.languages = {};
   state.summaryList = {};
   state.summaries.clear();
   state.appSettings = null;
@@ -252,7 +299,11 @@ function endSession() {
 
 let currentHash = "";
 function route() {
-  if (!state.user) return;
+  if (!state.user || !state.me) return;
+  if (!state.prefs?.onboarded) {   // new users choose journals, fields and a language first
+    showOnboarding();
+    return;
+  }
   state.previousHash = currentHash;
   currentHash = location.hash;
   state.navigation += 1;
@@ -281,9 +332,31 @@ async function ensureCalendar(force = false) {
     // Older data without meta/calendar: the day IDs, without counts
     days = Object.fromEntries((await data.dayIds()).map((d) => [d, { papers: 0, highlights: 0 }]));
   }
-  state.calendar = { days, dates: Object.keys(days).sort(), lastRun: meta?.last_run || null, loadedAt: Date.now() };
-  updateIndicators();
+  state.calendar = { all: days, lastRun: meta?.last_run || null, loadedAt: Date.now() };
+  viewCalendar();
   return state.calendar;
+}
+
+// The calendar as this user sees it: only days with papers in their journals, counted in
+// those journals (highlights only for admins)
+function viewCalendar() {
+  if (!state.calendar) return;
+  const mine = myAbbrs();
+  const admin = state.me?.role === "admin";
+  const days = {};
+  for (const [date, d] of Object.entries(state.calendar.all)) {
+    let papers = d.papers || 0;
+    let highlights = d.highlights || 0;
+    if (d.by_journal) {
+      const counts = Object.entries(d.by_journal).filter(([abbr]) => mine.has(abbr)).map(([, c]) => c);
+      papers = counts.reduce((n, c) => n + c[0], 0);
+      highlights = counts.reduce((n, c) => n + c[1], 0);
+    }
+    if (papers > 0) days[date] = { papers, highlights: admin ? highlights : 0 };
+  }
+  state.calendar.days = days;
+  state.calendar.dates = Object.keys(days).sort();
+  updateIndicators();
 }
 
 // ---------- Day page ----------
@@ -299,7 +372,7 @@ async function showDay(date) {
     state.day = date || null;
     renderSide();
     if (!date) {
-      show("today", { date: "" }, '<p class="empty">No digest yet.</p>');
+      show("today", { date: "" }, '<p class="empty">No papers from your journals yet.</p>');
       return;
     }
     const bar = {
@@ -314,11 +387,22 @@ async function showDay(date) {
       show("today", bar, '<p class="empty">No digest for this day.</p>');
       return;
     }
-    const papers = (await data.getMany("papers", day.paper_keys || [], state.papers)).filter(Boolean);
-    await loadSummaries(day.paper_keys || []);
+    // Only the journals this user follows
+    const mine = myAbbrs();
+    const all = (await data.getMany("papers", day.paper_keys || [], state.papers)).filter(Boolean);
+    const papers = all.filter((p) => mine.has(p.journal_abbr));
+    await loadSummaries(papers.map((p) => p.doi_key));
     const fields = day.fields?.length ? day.fields : DEFAULT_FIELDS;
     if (navigation !== state.navigation) return;
-    show("today", bar, view.dayPage(day, papers, fields, stateOf));
+    if (!papers.length) {
+      show("today", bar, '<p class="empty">No papers from your journals on this day.</p>');
+      markDaySeen(date);
+      return;
+    }
+    const threshold = day.highlight_threshold ?? 7;
+    const mineDay = { ...day, paper_count: papers.length,
+      highlight_count: papers.filter((p) => (p.relevance ?? 0) >= threshold).length };
+    show("today", bar, view.dayPage(mineDay, papers, fields, stateOf));
     document.title = `Paper digest ${date}`;
     markDaySeen(date);
   } catch (err) {
@@ -452,7 +536,8 @@ async function showBrowse() {
 function browseMatches() {
   const { q, journal, field } = state.browse;
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  return state.index.entries.filter((x) => (!journal || x.journal_abbr === journal)
+  const mine = myAbbrs();
+  return state.index.entries.filter((x) => (!journal || (journal === "__mine__" ? mine.has(x.journal_abbr) : x.journal_abbr === journal))
     && (!field || (x.field || "other") === field)
     && words.every((w) => x.hay.includes(w)));
 }
@@ -461,8 +546,9 @@ function renderBrowseList() {
   const list = document.getElementById("browse-list");
   if (!list || !state.index) return;
   const { q, journal, field, limit } = state.browse;
-  if (!q.trim() && !journal && !field) {
-    list.innerHTML = view.journalList(state.index.journals);
+  if (!q.trim() && !field && (!journal || journal === "__mine__")) {
+    const mine = myAbbrs();
+    list.innerHTML = view.journalList(journal ? state.index.journals.filter((j) => mine.has(j.abbr)) : state.index.journals);
     return;
   }
   const matches = browseMatches();
@@ -621,7 +707,7 @@ function unseenFulltext() {
 
 function updateIndicators() {
   const days = unseenDays();
-  const papers = days.reduce((n, d) => n + (state.calendar?.days[d]?.papers || 0), 0);
+  const papers = days.reduce((n, d) => n + (state.calendar?.days?.[d]?.papers || 0), 0);
   tabbar.querySelector('[data-tab="today"]').classList.toggle("has-dot", days.length > 0);
   tabbar.querySelector('[data-tab="library"]').classList.toggle("has-dot", state.user ? unseenFulltext() : false);
   push.setBadge(state.user ? papers : 0);
@@ -713,7 +799,7 @@ async function act(button, card) {
       openNote(paper);
     } else if (what === "request") {
       const request = view.latestRequest(key, state.requests);
-      if (state.busy.has(key) || ["pending", "processing"].includes(request?.status) || entryOf(key)?.fulltext) return;
+      if (state.busy.has(key) || ["pending", "processing"].includes(request?.status) || entryOf(key)?.hasOwnSummary) return;
       state.busy.add(key);
       refreshCards();
       try {
@@ -880,8 +966,13 @@ async function showSettings() {
     state.appSettings = current;
     state.notifyChoices = choices;
     if (state.me?.role === "admin") renderDigest(current.digest_time, current.timezone, Boolean(saved));
+    renderPrefs();
     await renderNotify();
-    if (state.me?.role === "admin") await renderMembers();
+    if (state.me?.role === "admin") {
+      await renderMembers();
+      await renderJournals();
+      renderLanguages();
+    }
   } catch (err) {
     if (navigation === state.navigation) {
       content.querySelector("#digest-section").innerHTML = `<p class="msg">Could not load the digest time. ${view.e(errorText(err))}</p>`;
@@ -979,6 +1070,220 @@ content.addEventListener("click", async (ev) => {
     await renderNotify();
   }
 });
+
+// ---------- Preferences (Settings and the first-run screen) ----------
+
+// Languages an admin can offer (code, name)
+const LANGUAGE_CHOICES = [
+  ["ja", "Japanese"], ["zh-Hans", "Chinese (Simplified)"], ["zh-Hant", "Chinese (Traditional)"], ["ko", "Korean"],
+  ["es", "Spanish"], ["fr", "French"], ["de", "German"], ["pt", "Portuguese"], ["it", "Italian"], ["ru", "Russian"],
+  ["ar", "Arabic"], ["tr", "Turkish"], ["vi", "Vietnamese"], ["id", "Indonesian"], ["th", "Thai"], ["hi", "Hindi"],
+];
+
+function prefsOptions(chosen) {
+  const journals = [...state.journals].map(([id, j]) => ({ id, name: j.name, abbr: j.abbr, active: j.active }))
+    .sort((a, b) => a.abbr.localeCompare(b.abbr));
+  return {
+    journals, chosenJournals: new Set(chosen.journals || []), fields: DEFAULT_FIELDS,
+    chosenFields: new Set(chosen.fields || []), languages: state.languages, language: chosen.language || "",
+  };
+}
+
+function readPrefs(form) {
+  const checked = (name) => [...form.querySelectorAll(`input[name="${name}"]:checked`)].map((i) => i.value);
+  return { journals: checked("journal"), fields: checked("field"), language: form.elements.language.value || null };
+}
+
+function showOnboarding() {
+  state.page = "onboarding";
+  document.body.classList.add("signed-out");
+  appbar.innerHTML = "";
+  const defaults = {
+    journals: [...state.journals].filter(([, j]) => j.active).map(([id]) => id),   // all, to untick
+    fields: [], language: state.languages.ja ? "ja" : null,   // Japanese if offered, otherwise none
+  };
+  content.innerHTML = view.onboardingPage(prefsOptions(state.prefs || defaults));
+  content.scrollTop = 0;
+}
+
+content.addEventListener("click", async (ev) => {
+  if (!ev.target.closest('[data-act="onboarding-done"]') || state.page !== "onboarding") return;
+  const prefs = readPrefs(content.querySelector("#prefs-form"));
+  const msg = content.querySelector(".onboarding > .msg");
+  if (!prefs.journals.length) { msg.textContent = "Choose at least one journal."; return; }
+  msg.textContent = "Saving…";
+  try {
+    await data.savePrefs({ ...prefs, onboarded: true });
+    state.prefs = { ...prefs, onboarded: true };
+    document.body.classList.remove("signed-out");
+    applyPrefs();
+    if (location.hash && location.hash !== "#/") location.hash = "#/";
+    else route();
+  } catch (err) {
+    msg.textContent = `Could not save: ${errorText(err)}`;
+  }
+});
+
+function renderPrefs() {
+  const section = content.querySelector("#prefs-section");
+  if (section) section.innerHTML = view.prefsSections(prefsOptions(state.prefs || {}));
+}
+
+// Settings: changes to journals, fields or language are saved at once
+content.addEventListener("change", async (ev) => {
+  const form = ev.target.closest("#prefs-form");
+  if (!form || state.page !== "settings") return;
+  const prefs = readPrefs(form);
+  if (!prefs.journals.length) {
+    ev.target.checked = true;
+    toast("Keep at least one journal", "error");
+    return;
+  }
+  try {
+    await data.savePrefs({ ...prefs, onboarded: true });
+    state.prefs = { ...prefs, onboarded: true };
+    applyPrefs();
+    state.index = null;   // Browse: rebuild the journal list
+    toast("Saved");
+  } catch (err) {
+    toast(`Could not save: ${errorText(err)}`, "error");
+    renderPrefs();
+  }
+});
+
+// ---------- Journals and languages (admins) ----------
+
+async function renderJournals() {
+  const section = content.querySelector("#journals-section");
+  if (!section) return;
+  try {
+    const [journals, usage] = await Promise.all([data.listJournals(), data.getMeta("journal_usage")]);
+    state.journals = journals;
+    const list = [...journals].map(([id, j]) => ({ id, ...j, issns: [j.issn_print, j.issn_online].filter(Boolean) }))
+      .sort((a, b) => a.abbr.localeCompare(b.abbr));
+    section.innerHTML = view.journalsAdmin({
+      journals: list, usage: usage?.counts || {}, usageAt: usage?.updated_at,
+      results: state.journalSearch?.results, picked: state.journalSearch?.picked, searchNote: state.journalSearch?.note,
+    });
+  } catch (err) {
+    section.innerHTML = `<p class="msg">Could not load the journals. ${view.e(errorText(err))}</p>`;
+  }
+}
+
+content.addEventListener("change", async (ev) => {
+  if (!ev.target.matches?.("[data-journal-active]") || state.page !== "settings") return;
+  const id = ev.target.closest("[data-journal-id]").dataset.journalId;
+  try {
+    await data.setJournalActive(id, ev.target.checked);
+    toast(ev.target.checked ? "Collecting again" : "Paused");
+  } catch (err) {
+    toast(`Could not save: ${errorText(err)}`, "error");
+  }
+  await renderJournals();
+  renderPrefs();
+});
+
+content.addEventListener("click", async (ev) => {
+  if (state.page !== "settings") return;
+  const del = ev.target.closest('[data-act="journal-delete"]');
+  const result = ev.target.closest("[data-result]");
+  const removeLang = ev.target.closest('[data-act="language-remove"]');
+  if (del) {
+    const id = del.closest("[data-journal-id]").dataset.journalId;
+    const j = state.journals.get(id);
+    const usage = (await data.getMeta("journal_usage").catch(() => null))?.counts?.[id] || 0;
+    const question = usage
+      ? `${usage} ${usage === 1 ? "user follows" : "users follow"} ${j.abbr}. Delete it from the list? Papers already collected stay.`
+      : `Delete ${j.abbr} from the list? Papers already collected stay.`;
+    if (!confirm(question)) return;
+    try {
+      await data.deleteJournal(id);
+      toast("Deleted");
+    } catch (err) {
+      toast(`Could not delete: ${errorText(err)}`, "error");
+    }
+    await renderJournals();
+    applyPrefs();
+    renderPrefs();
+  } else if (result) {
+    state.journalSearch.picked = state.journalSearch.results[Number(result.dataset.result)];
+    await renderJournals();
+    content.querySelector("#journal-add input[name=abbr]")?.focus();
+  } else if (removeLang) {
+    const code = removeLang.closest("[data-language]").dataset.language;
+    if (!confirm(`Remove ${state.languages[code]}? Users who chose it will see no translations, and new papers will not be translated into it.`)) return;
+    const next = { ...state.languages };
+    delete next[code];
+    try {
+      await data.saveLanguages(next);
+      state.languages = next;
+      applyPrefs();
+      renderLanguages();
+      renderPrefs();
+      toast("Removed");
+    } catch (err) {
+      toast(`Could not save: ${errorText(err)}`, "error");
+    }
+  }
+});
+
+content.addEventListener("submit", async (ev) => {
+  if (state.page !== "settings") return;
+  const form = ev.target;
+  if (form.id === "journal-search") {
+    ev.preventDefault();
+    state.journalSearch = { results: [], picked: null, note: "Searching…" };
+    await renderJournals();
+    try {
+      const results = await data.searchSources(form.elements.q.value);
+      state.journalSearch = { results, picked: null, note: results.length ? "Choose the journal:" : "Nothing found in OpenAlex." };
+    } catch (err) {
+      state.journalSearch = { results: [], picked: null, note: `Search failed: ${errorText(err)}` };
+    }
+    await renderJournals();
+  } else if (form.id === "journal-add") {
+    ev.preventDefault();
+    const msg = form.querySelector(".msg");
+    const picked = state.journalSearch?.picked;
+    const abbr = form.elements.abbr.value.trim();
+    const name = form.elements.name.value.trim();
+    const rss = form.elements.rss.value.trim();
+    const id = abbr.toLowerCase();
+    if (!/^[A-Za-z0-9&.-]{1,20}$/.test(abbr)) { msg.textContent = "Use letters, digits, & . - (up to 20)."; return; }
+    if (state.journals.has(id)) { msg.textContent = `${abbr} is already in the list.`; return; }
+    if (rss && !/^https?:\/\//.test(rss)) { msg.textContent = "The RSS address must start with http(s)://"; return; }
+    try {
+      await data.addJournal(id, { name, abbr, issnPrint: picked.issns[0], issnOnline: picked.issns[1], rss, openalexId: picked.id });
+      state.journalSearch = null;
+      toast(`${abbr} added`);
+      await renderJournals();
+      renderPrefs();
+    } catch (err) {
+      msg.textContent = `Could not add: ${errorText(err)}`;
+    }
+  } else if (form.id === "language-add") {
+    ev.preventDefault();
+    const code = form.elements.code.value;
+    const name = LANGUAGE_CHOICES.find(([c]) => c === code)?.[1];
+    if (!name) return;
+    const next = { ...state.languages, [code]: name };
+    try {
+      await data.saveLanguages(next);
+      state.languages = next;
+      applyPrefs();
+      renderLanguages();
+      renderPrefs();
+      toast(`${name} added`);
+    } catch (err) {
+      toast(`Could not save: ${errorText(err)}`, "error");
+    }
+  }
+});
+
+function renderLanguages() {
+  const section = content.querySelector("#languages-section");
+  if (section) section.innerHTML = view.languagesAdmin({ languages: state.languages, choices: LANGUAGE_CHOICES });
+}
 
 // ---------- Members (admins) ----------
 
