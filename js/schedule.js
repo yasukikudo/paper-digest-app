@@ -85,6 +85,15 @@ export function nextRunText(digestTime, timezone, lastRun, now = new Date()) {
   return `Tomorrow ${fmtTime(due, timezone)}`;
 }
 
+// "YYYY-MM" now in a time zone (for counting this month's full-text summaries)
+export function monthIn(timezone, now = new Date()) {
+  try {
+    return partsIn(timezone, now).date.slice(0, 7);
+  } catch {
+    return partsIn("UTC", now).date.slice(0, 7);
+  }
+}
+
 // "Sun, Oct 4, 7:53 AM PDT · 6 new papers · manual run"
 export function lastRunText(lastRun, timezone) {
   if (!lastRun?.finished_at) return "No run recorded yet";

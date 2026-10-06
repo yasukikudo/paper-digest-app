@@ -493,6 +493,19 @@ button.date-pick { border: 0; background: none; color: var(--text); font: inheri
 .stack { display: flex; flex-direction: column; gap: .5rem; margin-top: .75rem; }
 .btn.link.danger { color: var(--danger); }
 
+/* ---------- Members (admins) and the monthly allowance ---------- */
+.row input[type="text"], .row input[type="number"] {
+  flex: 1; min-width: 0; max-width: 62%; text-align: right; border: 0; background: none; color: var(--text);
+  font: inherit; font-size: 16px; min-height: 44px; padding: 0;
+}
+.row input[type="text"]:focus, .row input[type="number"]:focus { outline: none; }
+.members { display: flex; flex-direction: column; gap: .6rem; }
+.member.inactive { opacity: .6; }
+.member-name { font-weight: 600; }
+.row.uid { min-height: 30px; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .7rem; }
+.left { font-size: .74rem; color: var(--muted); }
+
 /* ---------- Motion (stopped when the device asks for reduced motion) ---------- */
 .content.enter > * { animation: enter .24s var(--ease); }
 @keyframes enter { from { opacity: 0; transform: translateY(6px); } }

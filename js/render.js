@@ -7,6 +7,12 @@ import {
   SECTION_LABELS, SOURCE_LABELS, STATUSES, REQUEST_LABELS, LANGUAGE_NAMES,
 } from "./labels.js";
 
+// Who is looking: relevance is shown to admins only (it reflects the admin's interest profile);
+// the request button only to users allowed full-text summaries. `remaining` = summaries left
+// this month (null = no limit).
+let viewer = { admin: false, canRequest: false, remaining: null };
+export const setViewer = (v) => { viewer = { ...viewer, ...v }; };
+
 const JAPANESE = /[぀-ヿ㐀-鿿＀-￯]/;
 const SHORT_AFFILIATION = 32;
 
@@ -180,12 +186,14 @@ export function actions(p, entry, request, busy) {
   let req = "";
   if (active || (request && request.status === "done" && !entry?.fulltext)) {
     req = `<p class="pill ${request.status}">${ICONS.clock}<span>${REQUEST_LABELS[request.status]}</span></p>`;
-  } else if (!entry?.fulltext && p.fulltext_access === "auto") {
+  } else if (!entry?.fulltext && p.fulltext_access === "auto" && viewer.canRequest) {
     const failed = request?.status === "failed";
+    const none = viewer.remaining === 0;
     req = (failed ? `<p class="req-error">${ICONS.alert}<span>${REQUEST_LABELS.failed}: ${e(request.error || "no reason given")}</span></p>` : "")
-      + `<button type="button" class="btn request" data-act="request"${busy ? " disabled" : ""}>${ICONS.request}`
-      + `<span>${busy ? "Requesting…" : failed ? "Request again" : "Request full-text summary"}</span></button>`;
-  } else if (!entry?.fulltext && p.fulltext_access === "manual") {
+      + `<button type="button" class="btn request" data-act="request"${busy || none ? " disabled" : ""}>${ICONS.request}`
+      + `<span>${busy ? "Requesting…" : none ? "Monthly limit reached" : failed ? "Request again" : "Request full-text summary"}</span></button>`
+      + (viewer.remaining !== null && !none ? `<span class="left">${viewer.remaining} left this month</span>` : "");
+  } else if (!entry?.fulltext && p.fulltext_access === "manual" && viewer.canRequest) {
     req = `<p class="pill manual">${ICONS.pdf}<span>PDF needed</span></p>`;
     if (request?.status === "failed") req += `<p class="req-error">${ICONS.alert}<span>${REQUEST_LABELS.failed}: ${e(request.error || "")}</span></p>`;
   }
@@ -195,8 +203,9 @@ export function actions(p, entry, request, busy) {
 // ---------- Cards ----------
 
 export function dayCard(p, day, fieldNames, state) {
-  const highlighted = (p.relevance ?? 0) >= day.highlight_threshold;
-  const fixed = [[`Relevance ${p.relevance ?? "–"}`, ""], [fieldNames.get(p.field) || p.field || "Other", ""]];
+  const highlighted = viewer.admin && (p.relevance ?? 0) >= day.highlight_threshold;
+  const fixed = viewer.admin ? [[`Relevance ${p.relevance ?? "–"}`, ""]] : [];
+  fixed.push([fieldNames.get(p.field) || p.field || "Other", ""]);
   if (highlighted) fixed.push(["Highlight", "hl"]);
   fixed.push(...accessBadge(p));
   const code = day.languages?.abstract_translation || "ja";
@@ -335,7 +344,11 @@ export function dayPage(day, papers, fieldList, stateOf) {
     if (!groups.has(f)) groups.set(f, []);
     groups.get(f).push(p);
   }
-  for (const list of groups.values()) list.sort((a, b) => (b.relevance ?? 0) - (a.relevance ?? 0));
+  // Admins: most relevant first; others: newest publication first
+  const byDate = (a, b) => (b.published_date || "").localeCompare(a.published_date || "");
+  for (const list of groups.values()) {
+    list.sort(viewer.admin ? (a, b) => (b.relevance ?? 0) - (a.relevance ?? 0) || byDate(a, b) : byDate);
+  }
   const order = [...fieldList.map((f) => f.id).filter((f) => groups.has(f)),
     ...[...groups.keys()].filter((f) => !fieldNames.has(f))];
   const name = (f) => fieldNames.get(f) || f;
@@ -350,7 +363,8 @@ export function dayPage(day, papers, fieldList, stateOf) {
   const foot = failed.length
     ? `<p class="run-note">Journals that failed to load in this day's runs: ${e(failed.join(", "))}</p>` : "";
   return '<header class="page-head">'
-    + `<p class="sub">${plural(day.paper_count ?? papers.length, "paper")} · ${plural(day.highlight_count ?? 0, "highlight")}</p></header>`
+    + `<p class="sub">${plural(day.paper_count ?? papers.length, "paper")}`
+    + (viewer.admin ? ` · ${plural(day.highlight_count ?? 0, "highlight")}` : "") + "</p></header>"
     + (toc ? `<ul class="toc">${toc}</ul>` : "")
     + (sections || '<p class="empty">No new papers.</p>') + foot;
 }
@@ -436,9 +450,48 @@ export function notifySection(n) {
     + toggle("empty", "Notify even when there are no new papers", n.emptyOn, !n.digestOn)
     + toggle("fulltext", "Full-text summary ready", n.fulltextOn)
     + "</div>"
-    + '<p class="hint">The switches apply to every device. Notifications go to each device where they are enabled. '
+    + '<p class="hint">The switches are yours and apply to all your devices. Notifications go to each of your devices where they are enabled. '
     + "The no-new-papers notice confirms that the morning digest ran; it does not change the icon badge.</p>"
     + `<div class="stack">${buttons.join("")}</div>`;
+}
+
+// Settings → Members (admins). `m`: {users: [{uid, display_name, role, active, fulltext_allowed,
+// monthly_limit, used}], me}; null while loading.
+export function membersSection(m) {
+  if (!m) return '<p class="group-label">Members</p><div class="inset"><p class="row"><span>Loading…</span></p></div>';
+  const rows = m.users.map((u) => {
+    const self = u.uid === m.me;
+    const limit = u.monthly_limit === null || u.monthly_limit === undefined ? "" : u.monthly_limit;
+    return `<div class="inset member${u.active ? "" : " inactive"}" data-uid="${e(u.uid)}">`
+      + `<p class="row"><span class="member-name">${e(u.display_name)}</span>`
+      + `<span class="value small">${e(u.role)}${u.active ? "" : " · inactive"} · ${u.used} this month</span></p>`
+      + `<p class="row uid"><span class="value small mono">${e(u.uid)}</span></p>`
+      + `<label class="row"><span>Display name</span><input type="text" data-member="display_name" maxlength="60" required autocomplete="off" value="${e(u.display_name)}"></label>`
+      + `<label class="row switch-row${self ? " disabled" : ""}"><span>Active</span><input type="checkbox" class="switch" data-member="active"${u.active ? " checked" : ""}${self ? " disabled" : ""}></label>`
+      + `<label class="row switch-row"><span>Full-text summaries</span><input type="checkbox" class="switch" data-member="fulltext_allowed"${u.fulltext_allowed ? " checked" : ""}></label>`
+      + `<label class="row"><span>Monthly limit</span><input type="number" class="limit" data-member="monthly_limit" min="0" max="1000" step="1" inputmode="numeric" placeholder="No limit" value="${e(limit)}"></label>`
+      + "</div>";
+  }).join("");
+  return '<p class="group-label">Members</p>'
+    + `<div class="members">${rows}</div>`
+    + '<p class="hint">An empty monthly limit means no limit. Summaries linked from an existing one are not counted. '
+    + "Inactive members cannot use the app; their data is kept.</p>"
+    + '<p class="group-label">Add a member</p>'
+    + '<form id="member-form"><div class="inset">'
+    + '<label class="row"><span>UID</span><input type="text" name="uid" required maxlength="128" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="From the Firebase console"></label>'
+    + '<label class="row"><span>Display name</span><input type="text" name="name" required maxlength="60" autocomplete="off"></label>'
+    + '<label class="row switch-row"><span>Full-text summaries</span><input type="checkbox" class="switch" name="allowed"></label>'
+    + '<label class="row"><span>Monthly limit</span><input type="number" class="limit" name="limit" min="0" max="1000" step="1" inputmode="numeric" placeholder="No limit"></label>'
+    + '</div><p class="msg" role="status"></p><button type="submit" class="btn primary wide">Add member</button></form>';
+}
+
+export function notRegisteredPage(email) {
+  return '<section class="login">'
+    + '<img class="login-icon" src="icons/icon-192.png" alt="" width="72" height="72">'
+    + '<h1>Paper digest</h1>'
+    + `<p class="who">${e(email || "")}</p>`
+    + '<p class="msg">This account is not registered as a user yet.</p>'
+    + '<button type="button" class="btn wide" data-act="signout">Sign out</button></section>';
 }
 
 export function settingsPage(email, digest = null) {
@@ -446,8 +499,9 @@ export function settingsPage(email, digest = null) {
     + ` inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="${auto}" placeholder="••••••" required></label>`;
   return '<section class="settings">'
     + `<p class="group-label">Account</p><div class="inset"><p class="row"><span>Signed in as</span><span class="value">${e(email)}</span></p></div>`
-    + `<div id="digest-section">${digestSection(digest)}</div>`
+    + (viewer.admin ? `<div id="digest-section">${digestSection(digest)}</div>` : "")
     + `<div id="notify-section">${notifySection(null)}</div>`
+    + (viewer.admin ? `<div id="members-section">${membersSection(null)}</div>` : "")
     + '<p class="group-label">Change PIN</p><form id="pin-form"><div class="inset">'
     + pin("current", "Current PIN", "current-password") + pin("next", "New PIN", "new-password")
     + pin("again", "New PIN again", "new-password") + "</div>"
@@ -491,8 +545,9 @@ export function journalList(journals) {
 export function resultRows(entries, total, threshold, isSaved, more) {
   if (!total) return '<p class="empty">No matching papers.</p>';
   const rows = entries.map((x) => {
-    const hl = (x.relevance ?? 0) >= threshold;
-    const meta = [x.journal_abbr, x.published_date, x.relevance !== null && x.relevance !== undefined ? `Relevance ${x.relevance}` : ""]
+    const hl = viewer.admin && (x.relevance ?? 0) >= threshold;
+    const meta = [x.journal_abbr, x.published_date,
+      viewer.admin && x.relevance !== null && x.relevance !== undefined ? `Relevance ${x.relevance}` : ""]
       .filter(Boolean).join(" · ");
     return `<li><a class="row-btn" href="#/paper/${e(x.doi_key)}" data-key="${e(x.doi_key)}">`
       + '<span class="row-main">'

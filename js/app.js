@@ -44,6 +44,9 @@ const state = {
   noteKey: null,             // paper the note sheet is for
   seen: undefined,           // settings/seen (live): {digest_date, fulltext_at}; null if missing
   appSettings: null,         // settings/app, as last read
+  me: null,                  // this account's entry in the user list (users/{uid})
+  summaryList: {},           // meta/summaries (live): doi_key → {language, created_at, source}
+  summaries: new Map(),      // doi_key → shared summary document (cache)
   pushBusy: false,
   unsubscribe: [],
 };
@@ -78,12 +81,38 @@ const today = () => new Date().toLocaleDateString("en-CA");   // YYYY-MM-DD on t
 const fresh = (loaded) => loaded && Date.now() - loaded.loadedAt < STALE_MS;
 const motion = () => (reducedMotion.matches ? "auto" : "smooth");
 
+// A paper as this user sees it: their library entry, with the shared summary (if any) as
+// `fulltext` (an imported summary of their own otherwise)
+function entryOf(key) {
+  const entry = state.optimistic.get(key) || state.library.get(key);
+  const shared = state.summaryList[key] ? state.summaries.get(key) : null;
+  if (!shared) return entry;
+  return { ...(entry || { doi_key: key }), fulltext: shared };
+}
+
 function stateOf(key) {
   return {
-    entry: state.optimistic.get(key) || state.library.get(key),
+    entry: entryOf(key),
     request: view.latestRequest(key, state.requests),
     busy: state.busy.has(key),
   };
+}
+
+// Load the shared summaries of these papers (those listed in meta/summaries)
+async function loadSummaries(keys) {
+  const wanted = keys.filter((k) => state.summaryList[k] && !state.summaries.get(k));
+  wanted.forEach((k) => state.summaries.delete(k));   // reload changed ones
+  if (wanted.length) await data.getMany("summaries", wanted, state.summaries).catch(() => {});
+}
+
+// Full-text summaries left this month (null = no limit); from this user's requests
+function remainingThisMonth() {
+  const limit = state.me?.monthly_limit;
+  if (limit === null || limit === undefined) return null;
+  const month = schedule.monthIn((state.appSettings || DEFAULT_DIGEST).timezone);
+  const used = [...state.requests.values()].filter((r) => r.status === "done" && !r.reused
+    && (r.processed_at || "").startsWith(month)).length;
+  return Math.max(0, limit - used);
 }
 
 // Show a page: top bar, content (with a short entrance animation) and the active tab
@@ -151,18 +180,50 @@ function showLogin(message = "") {
   });
 }
 
-function startSession(user) {
+async function startSession(user) {
   state.user = user;
+  data.setUid(user.uid);
+  // Only active users in the user list may use the app
+  const me = await data.getUserEntry(user.uid).catch(() => null);
+  if (state.user?.uid !== user.uid) return;
+  if (!me || !me.active) {
+    showNotRegistered();
+    return;
+  }
+  state.me = me;
+  view.setViewer({ admin: me.role === "admin", canRequest: me.fulltext_allowed === true });
   document.body.classList.remove("signed-out");
   const fail = (err) => toast(`Live updates stopped: ${errorText(err)}`, "error");
   state.unsubscribe = [
-    data.watchCollection("library", (docs) => { state.library = docs; onLiveChange(); }, fail),
-    data.watchCollection("requests", (docs) => { state.requests = docs; onLiveChange(); }, fail),
+    data.watchLibrary((docs) => { state.library = docs; onLiveChange(); }, fail),
+    data.watchMyRequests((docs) => {
+      state.requests = docs;
+      view.setViewer({ remaining: remainingThisMonth() });
+      onLiveChange();
+    }, fail),
     data.watchSeen(onSeen, fail),
+    data.watchSummaryList(async (list) => {
+      const changed = Object.keys(list).filter((k) => list[k]?.created_at !== state.summaryList[k]?.created_at);
+      state.summaryList = list;
+      changed.forEach((k) => state.summaries.delete(k));
+      await loadSummaries([...content.querySelectorAll("article.paper[data-key]")].map((a) => a.dataset.key));
+      onLiveChange();
+    }, fail),
   ];
+  data.getAppSettings().then((s) => {
+    state.appSettings = s || DEFAULT_DIGEST;
+    view.setViewer({ remaining: remainingThisMonth() });
+  }).catch(() => {});
   push.registerWorker().then(() => push.refresh());
   ensureCalendar().then(updateIndicators).catch(() => {});
   route();
+}
+
+function showNotRegistered() {
+  state.page = "login";
+  document.body.classList.add("signed-out");
+  appbar.innerHTML = "";
+  content.innerHTML = view.notRegisteredPage(state.user?.email);
 }
 
 function endSession() {
@@ -176,6 +237,12 @@ function endSession() {
   state.calendar = null;
   state.index = null;
   state.seen = undefined;
+  state.me = null;
+  state.summaryList = {};
+  state.summaries.clear();
+  state.appSettings = null;
+  data.setUid(null);
+  view.setViewer({ admin: false, canRequest: false, remaining: null });
   updateIndicators();
   closePanels();
   calSide.innerHTML = "";
@@ -248,6 +315,7 @@ async function showDay(date) {
       return;
     }
     const papers = (await data.getMany("papers", day.paper_keys || [], state.papers)).filter(Boolean);
+    await loadSummaries(day.paper_keys || []);
     const fields = day.fields?.length ? day.fields : DEFAULT_FIELDS;
     if (navigation !== state.navigation) return;
     show("today", bar, view.dayPage(day, papers, fields, stateOf));
@@ -435,6 +503,7 @@ async function showPaper(key) {
   showLoading("browse", bar);
   try {
     const [paper] = await data.getMany("papers", [key], state.papers);
+    await loadSummaries([key]);
     const index = await ensureIndex().catch(() => null);
     if (navigation !== state.navigation) return;
     if (!paper) {
@@ -475,6 +544,7 @@ async function showLibrary() {
   showLoading("library", { title: "Library" });
   try {
     await data.getMany("papers", [...state.library.keys()], state.papers);
+    await loadSummaries([...state.library.keys()]);
     if (navigation === state.navigation) {
       renderLibrary(false);
       markFulltextSeen();
@@ -490,12 +560,12 @@ function renderLibrary(keepScroll) {
   const { saved, groups } = libraryEntries();
   state.librarySignature = signatureOf(groups);
   const htmlGroups = new Map([...groups].map(([code, list]) => [code, list.map((entry) => ({
-    html: view.libraryCard(state.papers.get(entry.doi_key) || { doi_key: entry.doi_key }, entry, stateOf(entry.doi_key)),
+    html: view.libraryCard(state.papers.get(entry.doi_key) || { doi_key: entry.doi_key }, entryOf(entry.doi_key), stateOf(entry.doi_key)),
   }))]));
   // keep open panels across a re-render
   const open = new Set([...content.querySelectorAll("details[open]")].map(detailsId));
   show("library", { title: "Library" },
-    view.libraryPage(htmlGroups, { saved: saved.length, fulltext: saved.filter((x) => x.fulltext).length }),
+    view.libraryPage(htmlGroups, { saved: saved.length, fulltext: saved.filter((x) => entryOf(x.doi_key)?.fulltext).length }),
     { keepScroll });
   content.querySelectorAll("details").forEach((d) => { if (open.has(detailsId(d))) d.open = true; });
   content.querySelectorAll("details[open][data-authors]").forEach(loadAuthors);
@@ -512,6 +582,7 @@ async function onLiveChange() {
     const { groups } = libraryEntries();
     if (signatureOf(groups) !== state.librarySignature) {
       await data.getMany("papers", [...state.library.keys()], state.papers).catch(() => {});
+      await loadSummaries([...state.library.keys()]);
       if (state.page === "library") renderLibrary(true);
       return;
     }
@@ -544,7 +615,8 @@ function unseenDays() {
 function unseenFulltext() {
   const since = Date.parse(state.seen?.fulltext_at || "");
   if (!since) return false;
-  return [...state.library.values()].some((x) => x.saved && Date.parse(x.fulltext?.created_at || "") > since);
+  return [...state.library.values()].some((x) => x.saved && Date.parse(
+    state.summaryList[x.doi_key]?.created_at || x.fulltext?.created_at || "") > since);
 }
 
 function updateIndicators() {
@@ -641,7 +713,7 @@ async function act(button, card) {
       openNote(paper);
     } else if (what === "request") {
       const request = view.latestRequest(key, state.requests);
-      if (state.busy.has(key) || ["pending", "processing"].includes(request?.status) || state.library.get(key)?.fulltext) return;
+      if (state.busy.has(key) || ["pending", "processing"].includes(request?.status) || entryOf(key)?.fulltext) return;
       state.busy.add(key);
       refreshCards();
       try {
@@ -802,12 +874,14 @@ async function showSettings() {
   show("settings", { title: "Settings" }, view.settingsPage(state.user.email));
   bindPinForm();
   try {
-    const [saved] = await Promise.all([data.getAppSettings(), ensureCalendar(true)]);
+    const [saved, choices] = await Promise.all([data.getAppSettings(), data.getNotifyChoices(), ensureCalendar(true)]);
     if (navigation !== state.navigation) return;
     const current = saved || DEFAULT_DIGEST;
     state.appSettings = current;
-    renderDigest(current.digest_time, current.timezone, Boolean(saved));
+    state.notifyChoices = choices;
+    if (state.me?.role === "admin") renderDigest(current.digest_time, current.timezone, Boolean(saved));
     await renderNotify();
+    if (state.me?.role === "admin") await renderMembers();
   } catch (err) {
     if (navigation === state.navigation) {
       content.querySelector("#digest-section").innerHTML = `<p class="msg">Could not load the digest time. ${view.e(errorText(err))}</p>`;
@@ -859,7 +933,7 @@ function renderDigest(time, timezone, fromApp) {
 async function renderNotify() {
   const section = content.querySelector("#notify-section");
   if (!section) return;
-  const s = state.appSettings || DEFAULT_DIGEST;
+  const s = state.notifyChoices || {};
   section.innerHTML = view.notifySection({
     status: await push.status(), platform: push.platformName(), busy: state.pushBusy,
     digestOn: s.notify_digest !== false, emptyOn: s.notify_empty !== false, fulltextOn: s.notify_fulltext !== false,
@@ -871,8 +945,8 @@ content.addEventListener("change", async (ev) => {
   if (!kind || state.page !== "settings") return;
   const on = ev.target.checked;
   try {
-    await data.saveNotifyChoice(kind, on, state.appSettings || DEFAULT_DIGEST);
-    state.appSettings = { ...(state.appSettings || DEFAULT_DIGEST), [`notify_${kind}`]: on };
+    await data.saveNotifyChoice(kind, on);
+    state.notifyChoices = { ...(state.notifyChoices || {}), [`notify_${kind}`]: on };
     toast(on ? "Turned on" : "Turned off");
     if (kind === "digest") await renderNotify();   // the no-new-papers switch depends on it
   } catch (err) {
@@ -903,6 +977,75 @@ content.addEventListener("click", async (ev) => {
   } finally {
     state.pushBusy = false;
     await renderNotify();
+  }
+});
+
+// ---------- Members (admins) ----------
+
+async function renderMembers() {
+  const section = content.querySelector("#members-section");
+  if (!section) return;
+  try {
+    const [people, requests] = await Promise.all([data.listUsers(), data.allRequests()]);
+    const month = schedule.monthIn((state.appSettings || DEFAULT_DIGEST).timezone);
+    const used = (id) => requests.filter((r) => r.uid === id && r.status === "done" && !r.reused
+      && (r.processed_at || "").startsWith(month)).length;
+    const users = [...people].map(([id, u]) => ({ uid: id, ...u, used: used(id) }))
+      .sort((a, b) => (a.role === "admin" ? 0 : 1) - (b.role === "admin" ? 0 : 1) || (a.display_name || "").localeCompare(b.display_name || ""));
+    state.members = new Map(users.map((u) => [u.uid, u]));
+    section.innerHTML = view.membersSection({ users, me: state.user.uid });
+  } catch (err) {
+    section.innerHTML = `<p class="msg">Could not load the members. ${view.e(errorText(err))}</p>`;
+  }
+}
+
+const parseLimit = (value) => (String(value).trim() === "" ? null : Math.max(0, Math.min(1000, Math.round(Number(value)))));
+
+// Changing a member: display name, active, full-text summaries, monthly limit (saved at once)
+content.addEventListener("change", async (ev) => {
+  const field = ev.target.dataset?.member;
+  const row = ev.target.closest("[data-uid]");
+  if (!field || !row || state.page !== "settings") return;
+  const value = field === "monthly_limit" ? parseLimit(ev.target.value)
+    : field === "display_name" ? ev.target.value.trim() : ev.target.checked;
+  if (field === "monthly_limit" && value !== null && Number.isNaN(value)) {
+    toast("Enter a whole number, or leave it empty for no limit", "error");
+    return;
+  }
+  if (field === "display_name" && (!value || value.length > 60)) {
+    toast("Enter a display name (up to 60 characters)", "error");
+    await renderMembers();
+    return;
+  }
+  try {
+    await data.updateUser(row.dataset.uid, { [field]: value });
+    toast("Saved");
+  } catch (err) {
+    toast(`Could not save: ${errorText(err)}`, "error");
+  }
+  await renderMembers();
+});
+
+content.addEventListener("submit", async (ev) => {
+  if (ev.target.id !== "member-form") return;
+  ev.preventDefault();
+  const form = ev.target;
+  const msg = form.querySelector(".msg");
+  const id = form.elements.uid.value.trim();
+  const name = form.elements.name.value.trim();
+  if (!/^[A-Za-z0-9_-]{6,128}$/.test(id)) { msg.textContent = "Paste the UID from the Firebase console."; return; }
+  if (!name) { msg.textContent = "Enter a display name."; return; }
+  if (state.members?.has(id)) { msg.textContent = "This UID is already a member."; return; }
+  msg.textContent = "Adding…";
+  try {
+    await data.addUser(id, {
+      displayName: name, fulltextAllowed: form.elements.allowed.checked,
+      monthlyLimit: parseLimit(form.elements.limit.value),
+    });
+    toast("Member added");
+    await renderMembers();
+  } catch (err) {
+    msg.textContent = `Could not add: ${errorText(err)}`;
   }
 });
 

@@ -4,8 +4,9 @@ A small web app for reading the paper-digest data on a phone: each morning's new
 grouped by field, a calendar of past digests, a searchable list of all past papers (Browse),
 and a personal library of saved papers with full-text summaries.
 
-Live at <https://yasukikudo.com/paper-digest-app/> (GitHub Pages). Only the owner's account can
-sign in and read data; this repository holds no data, only the page code.
+Live at <https://yasukikudo.com/paper-digest-app/> (GitHub Pages). Only accounts in the user
+list (kept by an admin in the app) can use it; this repository holds no data, only the page
+code.
 
 ## How it works
 
@@ -14,26 +15,39 @@ sign in and read data; this repository holds no data, only the page code.
 - **Data** lives in Cloud Firestore in the Firebase project `paper-digest-a68d0`. A scheduled
   job in a separate private repository writes the papers every morning and processes full-text
   requests a few times a day. The data formats are described in that repository's `schema.md`.
-- **The app reads** `days`, `papers`, `library`, `authors`, `requests` and three kinds of light
-  documents written by the morning run, so it never reads every day or paper:
+- **Users.** After sign-in the app reads the account's entry in the user list, `users/{uid}`.
+  Accounts that are not listed, or not active, see "This account is not registered as a user
+  yet." and nothing else. Admins (role `admin`) also see relevance, highlights and relevance
+  reasons, set the morning digest time, and manage members (Settings → Members: add by UID,
+  display name, active, full-text permission, monthly limit, this month's count). Other users see each
+  field's papers newest first. Accounts themselves are created in the Firebase console.
+- **Shared and personal data.** Everyone reads the shared `days`, `papers`, `authors`,
+  `summaries` (full-text summaries; an existing one is shown to everyone), `meta/*`, `index/*`
+  and `settings/app`. Each user's own data is under `users/{uid}/` and only they can read it.
+- **The app reads** the shared data, the user's own data and requests, and three kinds of light
+  documents written by the scripts, so it never reads every day or paper:
   - `meta/calendar` (one read per session): papers and highlights per day, for the calendar and
     for previous / next day
   - `meta/index` and the `index/{shard}` documents it lists (read when Browse is first opened):
     a short entry per paper (title, authors, journal, dates, field, relevance, one-liner, tags,
     full-text access). Browse lists and searches these in the browser; a paper's full document
     is read from `papers` only when it is opened
-  Both are re-read after 10 minutes. **It writes** only:
-  - `library/{doi_key}`: save / unsave, status (to read, read), notes. A missing document is
+  - `meta/summaries` (live): which papers have a shared summary
+  The calendar and index are re-read after 10 minutes. **It writes** only:
+  - `users/{uid}/library/{doi_key}`: save / unsave, status (to read, read), notes. A missing document is
     created in the full schema shape; existing documents get only changed fields, and notes are
     added with `arrayUnion`, inside a transaction (the scripts write the same documents).
-  - `settings/app` (digest time, time zone, notification choices), `settings/seen` (what has
-    been viewed) and `push_tokens` (this device's notification token)
-  - `requests`: a new request with `status: "pending"` and `requested_by: "app"` for papers whose
-    open-access PDF can be downloaded automatically (`fulltext_access: "auto"`). Requesting also
-    saves the paper. A paper with a waiting or running request cannot be requested again.
+  - `users/{uid}/settings/seen` (what has been viewed), `settings/notify` (which notifications)
+    and `push_tokens` (this device's notification token)
+  - `requests`: a new request with the user's `uid`, `status: "pending"` and
+    `requested_by: "app"`, for papers with no shared summary whose open-access PDF can be
+    downloaded automatically (`fulltext_access: "auto"`), only by users allowed full-text
+    summaries; the button shows how many are left this month if there is a limit. Requesting
+    also saves the paper. A paper with a waiting or running request cannot be requested again.
+  - Admins only: `users/{uid}` (members) and `settings/app` (digest time and time zone)
 - Papers are always addressed by the stored `doi_key`; keys are never computed from DOIs.
-- `library` and `requests` are watched live (`onSnapshot`), so saving, notes and finished
-  full-text summaries appear without reloading. Only the affected parts of a card are redrawn.
+- The user's library, their requests and `meta/summaries` are watched live (`onSnapshot`), so
+  saving, notes and finished full-text summaries appear without reloading. Only the affected parts of a card are redrawn.
   Because library writes are transactions (confirmed only after a round trip), the app shows a
   change at once and replaces it with the stored document when the write finishes, or undoes it
   if the write fails.
