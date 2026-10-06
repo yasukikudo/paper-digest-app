@@ -35,6 +35,7 @@ export const REQUEST_LABELS = {
   processing: "Full text being summarized…",
   done: "Full-text request done",
   failed: "Full-text request failed",
+  cancelled: "Full-text request cancelled",
 };
 
 export const LANGUAGE_NAMES = {

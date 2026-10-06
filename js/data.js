@@ -2,9 +2,10 @@
 // Data formats are described in schema.md in the (private) paper-digest repository.
 // Papers are always addressed by the stored doi_key; keys are never computed from DOIs.
 //
-// Shared: days, papers, authors, meta, index, summaries, journals, settings/app, settings/languages.
-// The user list: users/{uid}. Each user's own data: users/{uid}/library, settings/seen,
-// settings/notify, settings/prefs, push_tokens (only that user can read or write them).
+// Shared: days, papers, authors, meta, index, journals, settings/app, settings/languages.
+// The user list: users/{uid}. Each user's own data: users/{uid}/library, summaries (full-text
+// summaries, written by the scripts), settings/seen, settings/notify, settings/prefs,
+// push_tokens (only that user can read them).
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
 import {
@@ -17,7 +18,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 
 export const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);   // stays signed in on this device until sign-out
@@ -90,15 +91,12 @@ export async function getDay(date) {
   return snap.exists() ? snap.data() : null;
 }
 
-// Light documents written by the scripts: meta/calendar, meta/index (null if missing)
+// Light documents written by the scripts: meta/calendar, meta/index, meta/journal_usage (null if missing)
 export async function getMeta(name) {
   const snap = await getDoc(doc(db, "meta", name));
   return snap.exists() ? snap.data() : null;
 }
 
-// meta/summaries, live: {papers: {doi_key: {language, created_at, source}}}
-export const watchSummaryList = (callback, onError) => onSnapshot(doc(db, "meta", "summaries"),
-  (snap) => callback(snap.exists() ? snap.data().papers || {} : {}), onError);
 
 // One shard of the paper index (index/{id}): its entries, newest first
 export async function getIndexShard(id) {
@@ -205,6 +203,11 @@ export async function getPushToken(id) {
 export const savePushToken = (id, data) => setDoc(mine("push_tokens", id), data);
 export const deletePushToken = (id) => deleteDoc(mine("push_tokens", id));
 
+// ---------- This user's full-text summaries (live): users/{uid}/summaries/{doi_key} ----------
+
+export const watchMySummaries = (callback, onError) => onSnapshot(collection(db, "users", uid, "summaries"),
+  (snap) => callback(new Map(snap.docs.map((d) => [d.id, d.data()]))), onError);
+
 // ---------- This user's library (live) ----------
 
 export const watchLibrary = (callback, onError) => onSnapshot(collection(db, "users", uid, "library"),
@@ -265,10 +268,14 @@ export const addNote = (paper, text) => changeEntry(paper, () => (
 
 // ---------- Requests ----------
 
-// This user's requests (live)
+// This user's requests (live), each with its document ID as `id`
 export const watchMyRequests = (callback, onError) => onSnapshot(
   query(collection(db, "requests"), where("uid", "==", uid)),
-  (snap) => callback(new Map(snap.docs.map((d) => [d.id, d.data()]))), onError);
+  (snap) => callback(new Map(snap.docs.map((d) => [d.id, { ...d.data(), id: d.id }]))), onError);
+
+// Cancel one of this user's pending requests (the rules allow only this change); the paper
+// stays saved
+export const cancelRequest = (id) => updateDoc(doc(db, "requests", id), { status: "cancelled", cancelled_at: isoNow() });
 
 // Admins only: every request (to count each user's summaries this month)
 export async function allRequests() {
@@ -276,7 +283,8 @@ export async function allRequests() {
   return snap.docs.map((d) => d.data());
 }
 
-// A full-text request in the schema's shape; the paper is saved as well.
+// A full-text request in the schema's shape; the paper is saved as well (and stays saved if
+// the request is cancelled).
 export async function requestFulltext(paper) {
   await addDoc(collection(db, "requests"), {
     schema_version: SCHEMA_VERSION,

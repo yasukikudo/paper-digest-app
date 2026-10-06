@@ -173,6 +173,7 @@ export const ICONS = {
   more: svg('<circle cx="6" cy="12" r="1.3" class="fill"/><circle cx="12" cy="12" r="1.3" class="fill"/><circle cx="18" cy="12" r="1.3" class="fill"/>'),
   cards: svg('<rect x="4" y="4.5" width="16" height="6" rx="1.5"/><rect x="4" y="13.5" width="16" height="6" rx="1.5"/>'),
   list: svg('<path d="M5 6.5h14M5 12h14M5 17.5h14"/>'),
+  close: svg('<path d="M7 7l10 10M17 7L7 17"/>'),
 };
 
 // The row of actions under a paper: save, status, note, request; links on the right
@@ -193,6 +194,10 @@ export function actions(p, entry, request, busy) {
   if (active || (request && request.status === "done" && !entry?.hasOwnSummary)) {
     const label = { pending: "Requested", processing: "Summarizing…", done: "Done" }[request.status];
     left.push(`<span class="pill ${request.status}" title="${e(REQUEST_LABELS[request.status])}">${ICONS.clock}<span>${label}</span></span>`);
+    // Only a waiting request can be cancelled (not once it is being summarized)
+    if (request.status === "pending") {
+      left.push(`<button type="button" class="btn icon-only ghost cancel" data-act="cancel-request" aria-label="Cancel the request" title="Cancel the request">${ICONS.close}</button>`);
+    }
   } else if (!entry?.hasOwnSummary && p.fulltext_access === "auto" && viewer.canRequest) {
     const failed = request?.status === "failed";
     const none = viewer.remaining === 0;

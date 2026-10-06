@@ -48,8 +48,7 @@ const state = {
   seen: undefined,           // settings/seen (live): {digest_date, fulltext_at}; null if missing
   appSettings: null,         // settings/app, as last read
   me: null,                  // this account's entry in the user list (users/{uid})
-  summaryList: {},           // meta/summaries (live): doi_key → {language, created_at, source}
-  summaries: new Map(),      // doi_key → shared summary document (cache)
+  summaries: new Map(),      // users/{uid}/summaries (live): doi_key → this user's summaries document
   prefs: null,               // users/{uid}/settings/prefs: journals, fields, language, onboarded
   journals: new Map(),       // journals/{id} (the journals that can be followed)
   languages: {},             // settings/languages: {code: name}
@@ -87,8 +86,6 @@ const today = () => new Date().toLocaleDateString("en-CA");   // YYYY-MM-DD on t
 const fresh = (loaded) => loaded && Date.now() - loaded.loadedAt < STALE_MS;
 const motion = () => (reducedMotion.matches ? "auto" : "smooth");
 
-// A paper as this user sees it: their library entry, with the shared summary (if any) as
-// `fulltext` (an imported summary of their own otherwise)
 // Abbreviations of the journals this user follows (every journal if they have not chosen)
 function myAbbrs() {
   const chosen = state.prefs?.journals;
@@ -107,15 +104,22 @@ function summaryLanguages(doc) {
   return langs;
 }
 
+// A paper as this user sees it: their library entry, with their own full-text summary (if any)
+// as `fulltext`, in their language if there is one (an imported summary otherwise)
 function entryOf(key) {
   const entry = state.optimistic.get(key) || state.library.get(key);
-  const langs = state.summaryList[key] ? summaryLanguages(state.summaries.get(key)) : {};
-  const own = langs[summaryLanguage()];
-  const shared = own || Object.values(langs)[0];
+  const langs = summaryLanguages(state.summaries.get(key));
+  const inLanguage = langs[summaryLanguage()];
+  const summary = inLanguage || Object.values(langs)[0];
   // hasOwnSummary: a summary in the user's language (or an imported one) exists, so no request
-  const hasOwnSummary = Boolean(own || (entry?.fulltext && !shared));
-  if (!shared) return entry ? { ...entry, hasOwnSummary } : entry;
-  return { ...(entry || { doi_key: key }), fulltext: shared, hasOwnSummary };
+  const hasOwnSummary = Boolean(inLanguage || (entry?.fulltext && !summary));
+  if (!summary) return entry ? { ...entry, hasOwnSummary } : entry;
+  return { ...(entry || { doi_key: key }), fulltext: summary, hasOwnSummary };
+}
+
+// When this user's newest summary of a paper was made ("" if none)
+function summaryTime(key) {
+  return Object.values(summaryLanguages(state.summaries.get(key))).map((s) => s.created_at || "").sort().at(-1) || "";
 }
 
 function stateOf(key) {
@@ -124,13 +128,6 @@ function stateOf(key) {
     request: view.latestRequest(key, state.requests),
     busy: state.busy.has(key),
   };
-}
-
-// Load the shared summaries of these papers (those listed in meta/summaries)
-async function loadSummaries(keys) {
-  const wanted = keys.filter((k) => state.summaryList[k] && !state.summaries.get(k));
-  wanted.forEach((k) => state.summaries.delete(k));   // reload changed ones
-  if (wanted.length) await data.getMany("summaries", wanted, state.summaries).catch(() => {});
 }
 
 // Full-text summaries left this month (null = no limit); from this user's requests
@@ -240,13 +237,7 @@ async function startSession(user) {
       onLiveChange();
     }, fail),
     data.watchSeen(onSeen, fail),
-    data.watchSummaryList(async (list) => {
-      const changed = Object.keys(list).filter((k) => list[k]?.created_at !== state.summaryList[k]?.created_at);
-      state.summaryList = list;
-      changed.forEach((k) => state.summaries.delete(k));
-      await loadSummaries([...content.querySelectorAll("article.paper[data-key]")].map((a) => a.dataset.key));
-      onLiveChange();
-    }, fail),
+    data.watchMySummaries((docs) => { state.summaries = docs; onLiveChange(); }, fail),
   ];
   data.getAppSettings().then((s) => {
     state.appSettings = s || DEFAULT_DIGEST;
@@ -290,8 +281,7 @@ function endSession() {
   state.prefs = null;
   state.journals = new Map();
   state.languages = {};
-  state.summaryList = {};
-  state.summaries.clear();
+  state.summaries = new Map();
   state.appSettings = null;
   data.setUid(null);
   view.setViewer({ admin: false, canRequest: false, remaining: null });
@@ -399,7 +389,6 @@ async function showDay(date) {
     const mine = myAbbrs();
     const all = (await data.getMany("papers", day.paper_keys || [], state.papers)).filter(Boolean);
     const papers = all.filter((p) => mine.has(p.journal_abbr));
-    await loadSummaries(papers.map((p) => p.doi_key));
     const fields = day.fields?.length ? day.fields : DEFAULT_FIELDS;
     if (navigation !== state.navigation) return;
     if (!papers.length) {
@@ -638,7 +627,6 @@ async function showPaper(key) {
   showLoading("browse", bar);
   try {
     const [paper] = await data.getMany("papers", [key], state.papers);
-    await loadSummaries([key]);
     const index = await ensureIndex().catch(() => null);
     if (navigation !== state.navigation) return;
     if (!paper) {
@@ -679,7 +667,6 @@ async function showLibrary() {
   showLoading("library", { title: "Library" });
   try {
     await data.getMany("papers", [...state.library.keys()], state.papers);
-    await loadSummaries([...state.library.keys()]);
     if (navigation === state.navigation) {
       renderLibrary(false);
       markFulltextSeen();
@@ -703,7 +690,7 @@ function renderLibrary(keepScroll) {
     view.libraryPage(htmlGroups, { saved: saved.length, fulltext: saved.filter((x) => entryOf(x.doi_key)?.fulltext).length }),
     { keepScroll });
   content.querySelectorAll("details").forEach((d) => { if (open.has(detailsId(d))) d.open = true; });
-  content.querySelectorAll("details[open][data-authors]").forEach(loadAuthors);
+  content.querySelectorAll('details.more[open] .pane[data-pane="au"]:not([hidden])').forEach(loadAuthors);
 }
 
 function detailsId(d) {
@@ -717,8 +704,7 @@ async function onLiveChange() {
     const { groups } = libraryEntries();
     if (signatureOf(groups) !== state.librarySignature) {
       await data.getMany("papers", [...state.library.keys()], state.papers).catch(() => {});
-      await loadSummaries([...state.library.keys()]);
-      if (state.page === "library") renderLibrary(true);
+        if (state.page === "library") renderLibrary(true);
       return;
     }
   }
@@ -751,7 +737,7 @@ function unseenFulltext() {
   const since = Date.parse(state.seen?.fulltext_at || "");
   if (!since) return false;
   return [...state.library.values()].some((x) => x.saved && Date.parse(
-    state.summaryList[x.doi_key]?.created_at || x.fulltext?.created_at || "") > since);
+    summaryTime(x.doi_key) || x.fulltext?.created_at || "") > since);
 }
 
 function updateIndicators() {
@@ -849,6 +835,12 @@ async function act(button, card) {
         () => data.setStatus(paper, status));
     } else if (what === "note") {
       openNote(paper);
+    } else if (what === "cancel-request") {
+      const request = view.latestRequest(key, state.requests);
+      if (request?.status !== "pending") return;
+      if (!confirm("Cancel this full-text request? The paper stays in your library.")) return;
+      await data.cancelRequest(request.id);
+      toast("Request cancelled");
     } else if (what === "request") {
       const request = view.latestRequest(key, state.requests);
       if (state.busy.has(key) || ["pending", "processing"].includes(request?.status) || entryOf(key)?.hasOwnSummary) return;
@@ -1352,7 +1344,9 @@ content.addEventListener("click", async (ev) => {
     content.querySelector("#journal-add input[name=abbr]")?.focus();
   } else if (removeLang) {
     const code = removeLang.closest("[data-language]").dataset.language;
-    if (!confirm(`Remove ${state.languages[code]}? Users who chose it will see no translations, and new papers will not be translated into it.`)) return;
+    const chosen = (await data.getMeta("journal_usage").catch(() => null))?.languages?.[code] || 0;
+    const who = chosen ? `${view.plural(chosen, "user")} chose it and will see no translations. ` : "No user has chosen it. ";
+    if (!confirm(`Remove ${state.languages[code]}? ${who}New papers will not be translated into it.`)) return;
     const next = { ...state.languages };
     delete next[code];
     try {
