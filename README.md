@@ -5,12 +5,7 @@
 <p align="center">A personal morning digest of new political science papers, readable on a phone or a desktop.</p>
 
 <p align="center">
-  <img src="docs/screenshots/today-phone.png" alt="Today on a phone: papers grouped by field, each with a one-line summary" width="280">
-  &nbsp;&nbsp;
-  <img src="docs/screenshots/details-phone.png" alt="A paper's Details opened on the Authors tab" width="280">
-</p>
-<p align="center">
-  <img src="docs/screenshots/desktop-dark.png" alt="Wide screen in dark mode: sidebar with sections, calendar and the day's fields" width="860">
+  <img src="docs/screenshots/hero.png" alt="Paper Digest on a wide screen in dark mode, with the day's papers on two phones in front" width="100%">
 </p>
 
 ## What it does
