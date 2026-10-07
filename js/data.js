@@ -70,10 +70,11 @@ export async function listUsers() {
   return new Map(snap.docs.map((d) => [d.id, d.data()]));
 }
 
-export function addUser(id, { displayName, fulltextAllowed, monthlyLimit }) {
+export function addUser(id, { displayName, fulltextAllowed, monthlyLimit, journalAllowed = true }) {
   return setDoc(doc(db, "users", id), {
     schema_version: SCHEMA_VERSION, display_name: displayName, role: "member", active: true,
     added_at: isoNow(), fulltext_allowed: fulltextAllowed, monthly_limit: monthlyLimit,
+    journal_allowed: journalAllowed,
   });
 }
 
@@ -112,19 +113,23 @@ export async function getMany(name, ids, cache) {
   return ids.map((id) => cache.get(id));
 }
 
-// ---------- Journals and translation languages (admins write) ----------
+// ---------- Journals (admins, and members the admin allows) and translation languages (admins) ----------
 
 export async function listJournals() {
   const snap = await getDocs(collection(db, "journals"));
   return new Map(snap.docs.map((d) => [d.id, d.data()]));
 }
 
-export function addJournal(id, { name, abbr, issnPrint, issnOnline, rss, openalexId }) {
+// `addedBy`: a member's display name (the rules require it for members; admins leave it out)
+export function addJournal(id, { name, abbr, issnPrint, issnOnline, rss, openalexId, addedBy }) {
   return setDoc(doc(db, "journals", id), {
     schema_version: SCHEMA_VERSION, name, abbr, issn_print: issnPrint || null, issn_online: issnOnline || null,
     rss: rss || null, active: true, openalex_id: openalexId || null, added_at: isoNow(),
+    ...(addedBy ? { added_by: addedBy } : {}),
   });
 }
+
+export const renameJournal = (id, name) => updateDoc(doc(db, "journals", id), { name });
 
 export const setJournalActive = (id, active) => updateDoc(doc(db, "journals", id), { active });
 export const deleteJournal = (id) => deleteDoc(doc(db, "journals", id));

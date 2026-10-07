@@ -525,7 +525,7 @@ export function notifySection(n) {
 }
 
 // Settings → Members (admins). `m`: {users: [{uid, display_name, role, active, fulltext_allowed,
-// monthly_limit, used}], me}; null while loading.
+// journal_allowed (missing = allowed), monthly_limit, used}], me}; null while loading.
 export function membersSection(m) {
   if (!m) return '<div class="inset"><p class="row"><span>Loading…</span></p></div>';
   const rows = m.users.map((u) => {
@@ -538,6 +538,7 @@ export function membersSection(m) {
       + `<label class="row"><span>Display name</span><input type="text" data-member="display_name" maxlength="60" required autocomplete="off" value="${e(u.display_name)}"></label>`
       + `<label class="row switch-row${self ? " disabled" : ""}"><span>Active</span><input type="checkbox" class="switch" data-member="active"${u.active ? " checked" : ""}${self ? " disabled" : ""}></label>`
       + `<label class="row switch-row"><span>Full-text summaries</span><input type="checkbox" class="switch" data-member="fulltext_allowed"${u.fulltext_allowed ? " checked" : ""}></label>`
+      + (u.role === "admin" ? "" : `<label class="row switch-row"><span>Add journals</span><input type="checkbox" class="switch" data-member="journal_allowed"${u.journal_allowed === false ? "" : " checked"}></label>`)
       + `<label class="row"><span>Monthly limit</span><input type="number" class="limit" data-member="monthly_limit" min="0" max="1000" step="1" inputmode="numeric" placeholder="No limit" value="${e(limit)}"></label>`
       + "</div>";
   }).join("");
@@ -549,6 +550,7 @@ export function membersSection(m) {
     + '<label class="row"><span>UID</span><input type="text" name="uid" required maxlength="128" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="From the Firebase console"></label>'
     + '<label class="row"><span>Display name</span><input type="text" name="name" required maxlength="60" autocomplete="off"></label>'
     + '<label class="row switch-row"><span>Full-text summaries</span><input type="checkbox" class="switch" name="allowed"></label>'
+    + '<label class="row switch-row"><span>Add journals</span><input type="checkbox" class="switch" name="journals" checked></label>'
     + '<label class="row"><span>Monthly limit</span><input type="number" class="limit" name="limit" min="0" max="1000" step="1" inputmode="numeric" placeholder="No limit"></label>'
     + '</div><p class="msg" role="status"></p><button type="submit" class="btn primary wide">Add member</button></form>';
 }
@@ -576,7 +578,8 @@ export function settingsMenu(m) {
     + (m.admin ? '<p class="group-label">Administration</p><div class="inset">'
       + row("digest", "Daily digest time", v.digest) + row("members", "Members", v.members)
       + row("journal-list", "Journals", v.journalList) + row("languages", "Languages", v.languages)
-      + row("costs", "Costs", v.costs) + row("run", "Run now", v.run) + "</div>" : "")
+      + row("costs", "Costs", v.costs) + row("run", "Run now", v.run) + "</div>"
+      : m.addJournals ? '<p class="group-label">Journals</p><div class="inset">' + row("journal-list", "Add journals", v.journalList) + "</div>" : "")
     + '<p class="group-label">Account</p><div class="inset">'
     + `<p class="row"><span>Signed in as</span><span class="value">${e(m.email)}</span></p>`
     + row("pin", "Change PIN") + "</div>"
@@ -675,9 +678,16 @@ export function paperPage(p, ctx, fieldNames, state) {
 // The checkboxes and select shared by Settings and the first-run screen.
 // `o`: {journals: [{id, name, abbr, active}], chosenJournals: Set, fields: [{id, name}],
 //       chosenFields: Set, languages: {code: name}, language}
+// A search box that hides the journal rows (marked data-search) of the same page that do not match
+export const journalFilter = () => '<label class="search journal-filter">' + ICONS.search
+  + '<input type="search" data-journal-filter placeholder="Search journals" autocomplete="off" autocorrect="off"'
+  + ' spellcheck="false" enterkeyhint="search" aria-label="Search journals"></label>'
+  + '<p class="hint filter-empty" hidden>No journal matches.</p>';
+const searchText = (j) => e(`${j.abbr} ${j.name}`.toLowerCase());
+
 function journalChecks(o) {
   return o.journals.map((j) => (
-    `<label class="row check-row${j.active ? "" : " paused"}"><span><span class="j-abbr">${e(j.abbr)}</span> ${e(j.name)}`
+    `<label class="row check-row${j.active ? "" : " paused"}" data-search="${searchText(j)}"><span><span class="j-abbr">${e(j.abbr)}</span> ${e(j.name)}`
     + `${j.active ? "" : ' <span class="tag">paused</span>'}</span>`
     + `<input type="checkbox" class="switch" name="journal" value="${e(j.id)}"${o.chosenJournals.has(j.id) ? " checked" : ""}></label>`
   )).join("");
@@ -703,6 +713,7 @@ export function prefsSections(o, part = null) {
   const show = (name) => !part || part === name;
   return '<form id="prefs-form">'
     + (show("journals") ? (part ? "" : '<p class="group-label">My journals</p>')
+      + (o.journals.length ? journalFilter() : "")
       + `<div class="inset">${journalChecks(o) || '<p class="row"><span>No journals yet.</span></p>'}</div>`
       + '<p class="hint">Today, the calendar, Browse, notifications and the badge show only these journals. '
       + "Paused journals are not collected for now.</p>" : "")
@@ -729,15 +740,19 @@ export function onboardingPage(o) {
 
 // ---------- Admins: journals and languages ----------
 
-// `o`: {journals: [{id, name, abbr, active, issns, rss}], usage: {id: n}, usageAt, results}
+// `o`: {admin, journals: [{id, name, abbr, active, issns, rss}], usage: {id: n}, usageAt, results}.
+// Admins see followers, pause and delete; members the admin allows only add journals and rename them.
 export function journalsAdmin(o) {
   const rows = o.journals.map((j) => {
     const n = o.usage[j.id] ?? 0;
-    return `<div class="inset journal${j.active ? "" : " inactive"}" data-journal-id="${e(j.id)}">`
-      + `<p class="row"><span class="member-name">${e(j.abbr)}</span><span class="value small">${n} following${j.active ? "" : " · paused"}</span></p>`
-      + `<p class="row"><span class="value small">${e(j.name)}${j.issns?.length ? ` · ${e(j.issns.join(", "))}` : ""}${j.rss ? " · RSS" : ""}</span></p>`
-      + `<label class="row switch-row"><span>Collect new papers</span><input type="checkbox" class="switch" data-journal-active${j.active ? " checked" : ""}></label>`
-      + `<button type="button" class="row danger" data-act="journal-delete">Delete</button>`
+    return `<div class="inset journal${j.active ? "" : " inactive"}" data-journal-id="${e(j.id)}" data-search="${searchText(j)}">`
+      + `<p class="row"><span class="member-name">${e(j.abbr)}</span>`
+      + (o.admin ? `<span class="value small">${n} following${j.active ? "" : " · paused"}</span>` : (j.active ? "" : '<span class="value small">paused</span>'))
+      + "</p>"
+      + `<label class="row"><span>Name</span><input type="text" data-journal-name maxlength="200" required autocomplete="off" value="${e(j.name)}"></label>`
+      + (j.issns?.length || j.rss ? `<p class="row"><span class="value small">${e((j.issns || []).join(", "))}${j.rss ? `${j.issns?.length ? " · " : ""}RSS` : ""}</span></p>` : "")
+      + (o.admin ? `<label class="row switch-row"><span>Collect new papers</span><input type="checkbox" class="switch" data-journal-active${j.active ? " checked" : ""}></label>`
+        + `<button type="button" class="row danger" data-act="journal-delete">Delete</button>` : "")
       + "</div>";
   }).join("");
   const results = (o.results || []).map((s, i) => (
@@ -745,9 +760,13 @@ export function journalsAdmin(o) {
     + `<span class="row-meta">${e(s.issns.join(", ") || "no ISSN")}${s.publisher ? ` · ${e(s.publisher)}` : ""} · ${s.works} works</span></span></button>`
   )).join("");
   const picked = o.picked;
-  return `<div class="members">${rows}</div>`
-    + `<p class="hint">"Following" counts active users, updated every hour${o.usageAt ? ` (last ${e(o.usageAt.slice(0, 16).replace("T", " "))})` : ""}. `
-    + "Paused journals are skipped by the morning run; deleting does not remove papers already collected.</p>"
+  return (o.journals.length ? journalFilter() : "") + `<div class="members">${rows}</div>`
+    + (o.admin
+      ? `<p class="hint">"Following" counts active users, updated every hour${o.usageAt ? ` (last ${e(o.usageAt.slice(0, 16).replace("T", " "))})` : ""}. `
+        + "Paused journals are skipped by the morning run; deleting does not remove papers already collected. "
+        + "The name is only what the app shows; change it here at any time.</p>"
+      : '<p class="hint">The name is only what the app shows; you can change it at any time. '
+        + "Only the administrator can pause or delete journals.</p>")
     + '<p class="group-label">Add a journal</p>'
     + '<form id="journal-search"><div class="inset">'
     + '<label class="row"><span>ISSN or name</span><input type="text" name="q" required autocomplete="off" placeholder="e.g. 0020-8183"></label>'

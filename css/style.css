@@ -733,3 +733,7 @@ a.menu-row:active { background: var(--chip); }
   .tabs { padding: 0 16px; }
   .compact-row { padding-left: 22px; padding-right: 22px; }
 }
+
+/* Journal lists: the search box and the rows it hides */
+.journal-filter { margin: 0 16px .75rem; max-width: var(--measure); }
+.is-hidden { display: none !important; }

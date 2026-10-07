@@ -544,7 +544,8 @@ async function ensureIndex(force = false) {
   const shards = await Promise.all(ids.map((id) => data.getIndexShard(id)));
   const byKey = new Map();
   for (const entry of shards.flat()) byKey.set(entry.doi_key, entry);
-  const names = meta.journals || {};
+  // Names as the journal list has them (an admin or member may have renamed one since the index was built)
+  const names = { ...(meta.journals || {}), ...Object.fromEntries([...state.journals.values()].map((j) => [j.abbr, j.name])) };
   const counts = new Map();
   const entries = [...byKey.values()].map((x) => {
     counts.set(x.journal_abbr, (counts.get(x.journal_abbr) || 0) + 1);
@@ -1043,6 +1044,8 @@ noteSheet.addEventListener("click", (ev) => {
 const DEFAULT_DIGEST = { digest_time: "05:00", timezone: "America/Chicago" };
 
 const ADMIN_PAGES = new Set(["digest", "members", "journal-list", "languages", "costs", "run"]);
+// Members may open the journal page (add, rename) while the admin allows it (missing = allowed)
+const canAddJournals = () => state.me?.role === "admin" || (state.me && state.me.journal_allowed !== false);
 const NOTIFY_LABELS = { enabled: "On", off: "Off", blocked: "Blocked", unsupported: "Not supported", "ios-browser": "Home Screen app only" };
 
 // Settings: a list of items with their current values; each opens its own page
@@ -1052,7 +1055,7 @@ async function showSettings() {
   state.settingsSection = null;
   document.title = "Settings";
   const admin = state.me?.role === "admin";
-  const menu = (values) => view.settingsMenu({ email: state.user.email, admin, values });
+  const menu = (values) => view.settingsMenu({ email: state.user.email, admin, addJournals: canAddJournals(), values });
   show("settings", { title: "Settings" }, menu({}));
   try {
     const chosen = state.prefs?.journals || [...state.journals.keys()];
@@ -1063,6 +1066,7 @@ async function showSettings() {
       fields: favs.length ? (favs.length > 1 ? `${favs.length} fields` : favs[0]) : "None",
       language: state.languages[state.prefs?.language] || "None",
       notifications: NOTIFY_LABELS[await push.status()] || "",
+      journalList: `${state.journals.size}`,
     };
     if (admin) {
       const [app, people] = await Promise.all([data.getAppSettings(), data.listUsers()]);
@@ -1093,7 +1097,7 @@ async function showSettings() {
 async function showSettingsSection(id) {
   const navigation = state.navigation;
   const admin = state.me?.role === "admin";
-  if (!view.SETTINGS_PAGES[id] || (ADMIN_PAGES.has(id) && !admin)) {
+  if (!view.SETTINGS_PAGES[id] || (ADMIN_PAGES.has(id) && !admin && !(id === "journal-list" && canAddJournals()))) {
     location.hash = "#/settings";
     return;
   }
@@ -1286,7 +1290,7 @@ function renderPrefs() {
 // Settings: changes to journals, fields or language are saved at once
 content.addEventListener("change", async (ev) => {
   const form = ev.target.closest("#prefs-form");
-  if (!form || state.page !== "settings") return;
+  if (!form || state.page !== "settings" || ev.target.matches("[data-journal-filter]")) return;
   const prefs = readPrefs(form);
   if (!prefs.journals.length) {
     ev.target.checked = true;
@@ -1305,7 +1309,23 @@ content.addEventListener("change", async (ev) => {
   }
 });
 
-// ---------- Journals and languages (admins) ----------
+// ---------- Journals and languages ----------
+
+// The search box above a journal list: hides rows (data-search) that do not contain every word typed
+document.addEventListener("input", (ev) => {
+  if (!ev.target.matches?.("[data-journal-filter]")) return;
+  const words = ev.target.value.toLowerCase().split(/\s+/).filter(Boolean);
+  const scope = ev.target.closest("#prefs-section, #journals-section, .onboarding") || document;
+  let shown = 0;
+  scope.querySelectorAll("[data-search]").forEach((row) => {
+    const match = words.every((w) => row.dataset.search.includes(w));
+    row.classList.toggle("is-hidden", !match);
+    if (match) shown += 1;
+  });
+  const empty = scope.querySelector(".filter-empty");
+  if (empty) empty.hidden = shown > 0 || !words.length;
+});
+
 
 async function renderJournals() {
   const section = content.querySelector("#journals-section");
@@ -1316,6 +1336,7 @@ async function renderJournals() {
     const list = [...journals].map(([id, j]) => ({ id, ...j, issns: [j.issn_print, j.issn_online].filter(Boolean) }))
       .sort((a, b) => a.abbr.localeCompare(b.abbr));
     section.innerHTML = view.journalsAdmin({
+      admin: state.me?.role === "admin",
       journals: list, usage: usage?.counts || {}, usageAt: usage?.updated_at,
       results: state.journalSearch?.results, picked: state.journalSearch?.picked, searchNote: state.journalSearch?.note,
     });
@@ -1324,8 +1345,30 @@ async function renderJournals() {
   }
 }
 
+// Renaming a journal (the display name only; saved at once)
 content.addEventListener("change", async (ev) => {
-  if (!ev.target.matches?.("[data-journal-active]") || state.page !== "settings") return;
+  if (!ev.target.matches?.("[data-journal-name]") || state.page !== "settings" || !canAddJournals()) return;
+  const id = ev.target.closest("[data-journal-id]").dataset.journalId;
+  const name = ev.target.value.trim();
+  if (!name || name.length > 200) {
+    toast("Enter a name (up to 200 characters)", "error");
+    await renderJournals();
+    return;
+  }
+  if (name === state.journals.get(id)?.name) return;
+  try {
+    await data.renameJournal(id, name);
+    state.index = null;   // Browse: rebuild the journal list with the new name
+    toast("Saved");
+  } catch (err) {
+    toast(`Could not save: ${errorText(err)}`, "error");
+  }
+  await renderJournals();
+  renderPrefs();
+});
+
+content.addEventListener("change", async (ev) => {
+  if (!ev.target.matches?.("[data-journal-active]") || state.page !== "settings" || state.me?.role !== "admin") return;
   const id = ev.target.closest("[data-journal-id]").dataset.journalId;
   try {
     await data.setJournalActive(id, ev.target.checked);
@@ -1342,6 +1385,7 @@ content.addEventListener("click", async (ev) => {
   const del = ev.target.closest('[data-act="journal-delete"]');
   const result = ev.target.closest("[data-result]");
   const removeLang = ev.target.closest('[data-act="language-remove"]');
+  if ((del || removeLang) && state.me?.role !== "admin") return;
   if (del) {
     const id = del.closest("[data-journal-id]").dataset.journalId;
     const j = state.journals.get(id);
@@ -1386,6 +1430,7 @@ content.addEventListener("click", async (ev) => {
 content.addEventListener("submit", async (ev) => {
   if (state.page !== "settings") return;
   const form = ev.target;
+  if (["journal-search", "journal-add"].includes(form.id) && !canAddJournals()) { ev.preventDefault(); return; }
   if (form.id === "journal-search") {
     ev.preventDefault();
     state.journalSearch = { results: [], picked: null, note: "Searching…" };
@@ -1409,7 +1454,10 @@ content.addEventListener("submit", async (ev) => {
     if (state.journals.has(id)) { msg.textContent = `${abbr} is already in the list.`; return; }
     if (rss && !/^https?:\/\//.test(rss)) { msg.textContent = "The RSS address must start with http(s)://"; return; }
     try {
-      await data.addJournal(id, { name, abbr, issnPrint: picked.issns[0], issnOnline: picked.issns[1], rss, openalexId: picked.id });
+      await data.addJournal(id, {
+        name, abbr, issnPrint: picked.issns[0], issnOnline: picked.issns[1], rss, openalexId: picked.id,
+        addedBy: state.me.role === "admin" ? null : state.me.display_name,   // members: the rules require it
+      });
       state.journalSearch = null;
       toast(`${abbr} added`);
       await renderJournals();
@@ -1646,7 +1694,7 @@ async function renderMembers() {
 
 const parseLimit = (value) => (String(value).trim() === "" ? null : Math.max(0, Math.min(1000, Math.round(Number(value)))));
 
-// Changing a member: display name, active, full-text summaries, monthly limit (saved at once)
+// Changing a member: display name, active, full-text summaries, adding journals, monthly limit (saved at once)
 content.addEventListener("change", async (ev) => {
   const field = ev.target.dataset?.member;
   const row = ev.target.closest("[data-uid]");
@@ -1685,7 +1733,7 @@ content.addEventListener("submit", async (ev) => {
   try {
     await data.addUser(id, {
       displayName: name, fulltextAllowed: form.elements.allowed.checked,
-      monthlyLimit: parseLimit(form.elements.limit.value),
+      monthlyLimit: parseLimit(form.elements.limit.value), journalAllowed: form.elements.journals.checked,
     });
     toast("Member added");
     await renderMembers();

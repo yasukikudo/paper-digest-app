@@ -3,8 +3,9 @@
 // access token that the admin enters in Settings -> Run now. The token and the repository name
 // (owner/repo) are kept only in this browser's localStorage: never in Firestore, never in this
 // code. The token needs only "Actions: Read and write" on that one repository.
-// The job runs the morning digest at most once a day however often it is started, so a
-// misused token cannot run up costs.
+// The job runs the morning digest at most once a day when it is started automatically (GitHub's
+// schedule, the iPhone shortcut, "app-auto"); a start by hand from here ("app") may repeat, and a
+// repeat only screens papers that have not been screened yet.
 
 import { e } from "./render.js";
 
@@ -155,7 +156,7 @@ export function page() {
     + `<button type="button" class="btn wide" data-act="run-requests"${!s.hasToken || busy ? " disabled" : ""}>Process requests</button>`
     + "</div>"
     + (status ? `<div class="inset run-inset">${status}</div>` : "")
-    + `<p class="hint">${s.hasToken ? "Today's digest runs at most once a day; if it has already run, the job only checks and ends." : "Save a GitHub token below to use these buttons."}</p>`
+    + `<p class="hint">${s.hasToken ? "Use this button as often as you like: papers already screened are skipped, so a repeat only picks up what is new or what an earlier run left behind. The automatic starts below run at most once a day." : "Save a GitHub token below to use these buttons."}</p>`
     + '<p class="group-label">When the app opens</p><div class="inset">'
     + `<label class="row switch-row${s.hasToken ? "" : " disabled"}"><span>Start today's digest if it is late</span>`
     + `<input type="checkbox" class="switch" data-act="run-auto"${s.auto ? " checked" : ""}${s.hasToken ? "" : " disabled"}></label></div>`
