@@ -85,6 +85,7 @@ function errorText(err) {
 }
 
 const today = () => new Date().toLocaleDateString("en-CA");   // YYYY-MM-DD on this device
+const addDays = (date, n) => { const d = new Date(`${date}T12:00:00`); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA"); };
 const fresh = (loaded) => loaded && Date.now() - loaded.loadedAt < STALE_MS;
 const motion = () => (reducedMotion.matches ? "auto" : "smooth");
 
@@ -337,8 +338,10 @@ async function ensureCalendar(force = false) {
   return state.calendar;
 }
 
-// The calendar as this user sees it: only days with papers in their journals, counted in
-// those journals (highlights only for admins)
+// The calendar as this user sees it: `days` = days with papers in their journals, counted in
+// those journals (highlights only for admins; these get a dot and count for the badge);
+// `ran` = every day a digest ran, 0 papers included; `first` = the first digest day (days
+// before it, and after today, cannot be opened)
 function viewCalendar() {
   if (!state.calendar) return;
   const mine = myAbbrs();
@@ -356,6 +359,8 @@ function viewCalendar() {
   }
   state.calendar.days = days;
   state.calendar.dates = Object.keys(days).sort();
+  state.calendar.ran = new Set(Object.keys(state.calendar.all));
+  state.calendar.first = [...state.calendar.ran].sort()[0] || "";
   updateIndicators();
 }
 
@@ -366,27 +371,32 @@ async function showDay(date) {
   state.page = "day";
   showLoading("today", { date: date || "" });
   try {
-    const cal = await ensureCalendar(!date);   // the latest day: check for a new digest
-    if (!date) date = cal.dates.at(-1);
+    const cal = await ensureCalendar(!date);   // today: check for a new digest
+    const now = today();
+    if (!date) date = now;
     if (navigation !== state.navigation) return;
-    state.day = date || null;
-    renderSide();
-    if (!date) {
-      show("today", { date: "" }, '<p class="empty">No papers from your journals yet.</p>');
+    if (!cal.first || date > now) {   // nothing yet, or a day still to come
+      state.day = date;
+      renderSide();
+      show("today", { date }, `<p class="empty">${cal.first ? "This day has not come yet." : "No digest has run yet."}</p>`);
       return;
     }
+    state.day = date;
+    renderSide();
+    // Previous / next: one day at a time, from the first digest day to today
     const bar = {
       date,
-      today: today(),
-      prev: cal.dates.filter((d) => d < date).at(-1),
-      next: cal.dates.find((d) => d > date),
+      today: now,
+      prev: date > cal.first ? addDays(date, -1) : null,
+      next: date < now ? addDays(date, 1) : null,
     };
     state.dayBar = bar;
     appbar.innerHTML = view.appBar(bar);
     const day = await data.getDay(date);
     if (navigation !== state.navigation) return;
     if (!day) {
-      show("today", bar, '<p class="empty">No digest for this day.</p>');
+      show("today", bar, view.noDigest(date === now, state.me?.role === "admin"));
+      markDaySeen(date);
       return;
     }
     // Only the journals this user follows
@@ -396,7 +406,8 @@ async function showDay(date) {
     const fields = day.fields?.length ? day.fields : DEFAULT_FIELDS;
     if (navigation !== state.navigation) return;
     if (!papers.length) {
-      show("today", bar, '<p class="empty">No papers from your journals on this day.</p>');
+      show("today", bar, `<p class="empty">${all.length ? "No new papers from your journals on this day." : "No new papers on this day."}</p>`
+        + `<p class="empty-sub">${all.length ? `The digest found ${view.plural(all.length, "paper")} in other journals.` : "The digest ran and found nothing new in the journals."}</p>`);
       markDaySeen(date);
       return;
     }
@@ -418,7 +429,7 @@ async function showDay(date) {
 
 function calendarHtml() {
   const month = state.calMonth || (state.day || today()).slice(0, 7);
-  return view.calendar(month, state.calendar?.days || {}, state.day, today());
+  return view.calendar(month, state.calendar?.days || {}, state.day, today(), state.calendar?.ran, state.calendar?.first);
 }
 
 // The day's papers as cards or compact rows, and its fields in the sidebar (wide screens)
@@ -501,7 +512,7 @@ function onCalendarClick(ev) {
     if (what === "next") moveMonth(1);
     if (what === "today") {
       state.calMonth = today().slice(0, 7);
-      if (state.calendar?.days[today()]) {
+      if (state.calendar?.first) {   // today can always be opened (even with no papers yet)
         location.hash = `#/day/${today()}`;
         return;
       }

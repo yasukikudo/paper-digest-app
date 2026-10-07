@@ -325,14 +325,27 @@ export function appBar({ title, date, prev, next, back, today }) {
     + "</div>";
 }
 
+// A day with no digest record: today before the morning run, or a day GitHub did not run the job
+export function noDigest(isToday, admin) {
+  if (isToday) {
+    return '<p class="empty">Today\'s digest has not run yet.</p>'
+      + (admin ? '<p class="empty-sub">If it is past the digest time, start it now.</p>'
+        + '<p class="empty-action"><a class="btn" href="#/settings/run">Run now</a></p>' : "");
+  }
+  return '<p class="empty">No digest was run for this day.</p>'
+    + (admin ? '<p class="empty-sub">Papers that appeared then were collected by the next run.</p>' : "");
+}
+
 // ---------- Calendar ----------
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August",
   "September", "October", "November", "December"];
 
-// A month grid. `days` is meta/calendar.days ({date: {papers, highlights}});
-// `month` is "YYYY-MM"; `selected` the open day; `today` the device's date.
-export function calendar(month, days, selected, today) {
+// A month grid. `days`: the days with papers for this user ({date: {papers, highlights}}; they
+// get a dot); `ran`: every day a digest ran (0 papers included); `month` is "YYYY-MM";
+// `selected` the open day; `today` the device's date; `firstDay` the first digest day. Every
+// day from `firstDay` to `today` can be opened; later and earlier ones cannot.
+export function calendar(month, days, selected, today, ran = new Set(), firstDay = "") {
   const [y, m] = month.split("-").map(Number);
   const first = new Date(y, m - 1, 1).getDay();
   const count = new Date(y, m, 0).getDate();
@@ -341,13 +354,15 @@ export function calendar(month, days, selected, today) {
   for (let d = 1; d <= count; d++) {
     const date = `${month}-${String(d).padStart(2, "0")}`;
     const info = days[date];
-    const cls = ["cal-day", info ? "has" : "", info?.highlights ? "hl" : "",
+    const open = Boolean(firstDay) && date >= firstDay && date <= today;
+    const cls = ["cal-day", open ? "has" : "", info ? "dotted" : "", info?.highlights ? "hl" : "",
       date === today ? "today" : "", date === selected ? "selected" : ""].filter(Boolean).join(" ");
     const label = `${MONTHS[m - 1]} ${d}`
-      + (info ? `: ${plural(info.papers, "paper")}${info.highlights ? `, ${plural(info.highlights, "highlight")}` : ""}` : ": no digest")
+      + (info ? `: ${plural(info.papers, "paper")}${info.highlights ? `, ${plural(info.highlights, "highlight")}` : ""}`
+        : ran.has(date) ? ": no new papers" : date > today ? "" : ": no digest")
       + (date === today ? " (today)" : "");
-    cells.push(info
-      ? `<button type="button" class="${cls}" data-date="${date}" aria-label="${e(label)}"${date === selected ? ' aria-current="date"' : ""}><span>${d}</span><i class="dot"></i></button>`
+    cells.push(open
+      ? `<button type="button" class="${cls}" data-date="${date}" aria-label="${e(label)}"${date === selected ? ' aria-current="date"' : ""}><span>${d}</span>${info ? '<i class="dot"></i>' : ""}</button>`
       : `<span class="${cls}" aria-label="${e(label)}"><span>${d}</span></span>`);
   }
   const weekdays = ["S", "M", "T", "W", "T", "F", "S"].map((w) => `<span class="cal-wd" aria-hidden="true">${w}</span>`).join("");

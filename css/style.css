@@ -305,6 +305,9 @@ p.more { color: var(--muted); font-size: .76rem; padding-top: .5rem; }
 .notes time { display: block; color: var(--muted); font-size: .7rem; font-family: var(--font-ui); }
 
 .empty { color: var(--muted); padding: 2rem 4px; text-align: center; }
+.empty + .empty-sub { margin-top: -1.5rem; }
+.empty-sub { color: var(--muted); font-size: .82rem; text-align: center; padding: 0 4px 1rem; }
+.empty-action { text-align: center; }
 .run-note { color: var(--muted); font-size: .72rem; margin-top: 1.5rem; padding: 0 4px; }
 
 /* ---------- A day: count and the Cards / Compact switch ---------- */
