@@ -1772,9 +1772,23 @@ function bindPinForm() {
 
 // ---------- Start ----------
 
+// iOS suspends a Home Screen app in the background; after a long time its connections to Firebase
+// (live updates, the saved sign-in) can be dead, and the app then hangs until it is swiped away.
+// Coming back after RELOAD_AFTER_MS, or from the back-forward cache, the page is reloaded (the
+// address, so the same page, is kept) unless a note is being written.
+const RELOAD_AFTER_MS = 10 * 60 * 1000;
+let hiddenAt = null;
+const writingNote = () => !document.getElementById("note-sheet")?.hidden;
+window.addEventListener("pageshow", (ev) => { if (ev.persisted && state.user && !writingNote()) location.reload(); });
+
 // Coming back to the app after a while: the next page load re-reads the calendar and index
 // (and, for admins with a token here, today's digest is started if it is late)
 document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") hiddenAt = Date.now();
+  else if (hiddenAt && state.user && Date.now() - hiddenAt > RELOAD_AFTER_MS && !writingNote()) {
+    location.reload();
+    return;
+  }
   if (document.visibilityState === "visible" && state.user && state.appSettings) maybeAutoStart();
   if (document.visibilityState === "visible" && state.calendar && !fresh(state.calendar) && state.page === "day") {
     ensureCalendar(true).then(renderSide).catch(() => {});

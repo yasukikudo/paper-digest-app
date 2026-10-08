@@ -51,8 +51,22 @@
 
   <!-- The only scrolling area -->
   <main class="content" id="content">
+    <!-- Shown until the app has signed in and drawn its first page (the app replaces this) -->
+    <div class="boot" role="status">
+      <img src="icons/icon-192.png" alt="" width="64" height="64">
+      <p>Loading…</p>
+      <p class="boot-slow" hidden>Taking longer than usual.
+        <button type="button" onclick="location.reload()">Reload</button></p>
+    </div>
     <div class="skeleton" aria-hidden="true"><div class="sk-card"></div><div class="sk-card"></div></div>
   </main>
+  <script>
+    // If the first page has still not appeared after 10 seconds, offer a reload
+    setTimeout(function () {
+      var slow = document.querySelector(".boot .boot-slow");
+      if (slow) slow.hidden = false;
+    }, 10000);
+  </script>
 
   <!-- Fixed tab bar -->
   <nav class="tabbar" id="tabbar" aria-label="Sections">
