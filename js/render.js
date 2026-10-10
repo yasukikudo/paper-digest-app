@@ -140,7 +140,20 @@ export function cardMeta(p, entry, opts = {}) {
   else if (p.fulltext_access === "auto") items.push(["OA", false]);
   else if (p.fulltext_access === "manual") items.push(["OA · PDF needed", false]);
   if (opts.library && entry?.saved_at) items.push([`Saved ${e(entry.saved_at)}`, false]);
+  for (const flag of dataFlags(p)) items.push([`<span class="flag" title="${e(flag.hint)}">${e(flag.label)}</span>`, true]);
   return items.map(([text, html]) => (html ? text : e(text))).join('<span class="sep">·</span>');
+}
+
+// Small notes for what the digest could not get (a paper found before OpenAlex had it has no abstract
+// and only the author line from the feed, with no affiliation or author ID)
+function dataFlags(p) {
+  const flags = [];
+  if (!p.abstract) flags.push({ label: "No abstract", hint: "The digest found no abstract for this paper; the summary is from the title alone. It is checked again for a week." });
+  const ships = p.authorships || [];
+  if (ships.length && ships.every((a) => !a.author_id && !a.institution)) {
+    flags.push({ label: "Authors unverified", hint: "Author names and affiliations come from the journal's feed and may be incomplete." });
+  }
+  return flags;
 }
 
 // Relevance (admins only): five dots and the number, next to the title
@@ -149,6 +162,15 @@ function relevanceMeter(p) {
   const filled = Math.round(p.relevance / 2);
   const dots = Array.from({ length: 5 }, (_, i) => `<i class="${i < filled ? "on" : ""}"></i>`).join("");
   return `<span class="rel" title="Relevance ${p.relevance} of 10" aria-label="Relevance ${p.relevance} of 10">${dots}<b>${p.relevance}</b></span>`;
+}
+
+// Relevance (admins only) as a chip above the title: hi = highlight, lo = low (the card is dimmed), mid = the rest
+const LOW_RELEVANCE = 3;
+function relevanceChip(p, level) {
+  if (!viewer.admin || p.relevance === null || p.relevance === undefined) return "";
+  const filled = Math.round(p.relevance / 2);
+  const dots = Array.from({ length: 5 }, (_, i) => `<i class="${i < filled ? "on" : ""}"></i>`).join("");
+  return `<span class="rel-chip ${level}" title="Relevance ${p.relevance} of 10" aria-label="Relevance ${p.relevance} of 10">${dots}<b>${p.relevance}</b></span>`;
 }
 
 // ---------- Icons (inline SVG, stroke-based; colored by currentColor) ----------
@@ -248,10 +270,12 @@ export function card(p, state, day, opts = {}) {
   const entry = state.entry;
   const highlighted = viewer.admin && day && (p.relevance ?? 0) >= day.highlight_threshold;
   const oneLiner = (opts.library && entry?.fulltext?.one_liner) || p.one_liner;
+  const low = viewer.admin && day && p.relevance !== null && p.relevance !== undefined && !highlighted && p.relevance <= LOW_RELEVANCE;
+  const level = highlighted ? "hi" : low ? "lo" : "mid";
   return [
-    `<article class="paper${highlighted ? " highlighted" : ""}" data-key="${e(p.doi_key)}"${opts.library ? ' data-library="1"' : ""}>`,
-    `<p class="card-meta" data-slot="meta">${cardMeta(p, entry, opts)}</p>`,
-    `<h3 class="title"><a href="${e(p.url || "")}" target="_blank" rel="noopener">${e(p.title)}</a>${relevanceMeter(p)}</h3>`,
+    `<article class="paper${highlighted ? " highlighted" : ""}${low ? " low" : ""}" data-key="${e(p.doi_key)}"${opts.library ? ' data-library="1"' : ""}>`,
+    `<div class="card-top">${relevanceChip(p, level)}<p class="card-meta" data-slot="meta">${cardMeta(p, entry, opts)}</p></div>`,
+    `<h3 class="title"><a href="${e(p.url || "")}" target="_blank" rel="noopener">${e(p.title)}</a></h3>`,
     byline(p, opts.showField || ""),
     `<div data-slot="oneliner">${oneLiner ? para(oneLiner, "oneliner") : ""}</div>`,
     highlighted && p.relevance_reason ? para(p.relevance_reason, "reason") : "",
