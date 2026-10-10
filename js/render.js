@@ -7,12 +7,13 @@ import {
   SECTION_LABELS, SOURCE_LABELS, STATUSES, REQUEST_LABELS, LANGUAGE_NAMES,
 } from "./labels.js";
 
-// Who is looking: relevance is shown to admins only (it reflects the admin's interest profile);
+// Who is looking: relevance (and everything drawn from it: highlights, dimming, sorting) is shown to admins
+// only, and only while their "Show relevance" switch is on (viewer.relevance) (it reflects the admin's interest profile);
 // the request button only to users allowed full-text summaries. `remaining` = summaries left
 // this month (null = no limit).
 // Also the user's favourite fields (listed first, papers marked), their translation language
 // and the names of the offered languages.
-let viewer = { admin: false, canRequest: false, remaining: null, favFields: new Set(), language: null, languageNames: {} };
+let viewer = { admin: false, relevance: false, canRequest: false, remaining: null, favFields: new Set(), language: null, languageNames: {} };
 export const setViewer = (v) => { viewer = { ...viewer, ...v }; };
 export const languageName = (code) => viewer.languageNames[code] || LANGUAGE_NAMES[code] || (code === "en" ? "English" : code);
 
@@ -32,6 +33,14 @@ export function e(text) {
   if (text === null || text === undefined) return "";
   return String(text).replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Escaped text with each search word wrapped in <mark>
+export function marked(text, words) {
+  const s = String(text ?? "");
+  if (!words?.length) return e(s);
+  const re = new RegExp(`(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+  return s.split(re).map((part, i) => (i % 2 ? `<mark>${e(part)}</mark>` : e(part))).join("");
 }
 
 export const lang = (text) => (text && JAPANESE.test(String(text)) ? ' lang="ja"' : "");
@@ -158,7 +167,7 @@ function dataFlags(p) {
 
 // Relevance (admins only): five dots and the number, next to the title
 function relevanceMeter(p) {
-  if (!viewer.admin || p.relevance === null || p.relevance === undefined) return "";
+  if (!viewer.relevance || p.relevance === null || p.relevance === undefined) return "";
   const filled = Math.round(p.relevance / 2);
   const dots = Array.from({ length: 5 }, (_, i) => `<i class="${i < filled ? "on" : ""}"></i>`).join("");
   return `<span class="rel" title="Relevance ${p.relevance} of 10" aria-label="Relevance ${p.relevance} of 10">${dots}<b>${p.relevance}</b></span>`;
@@ -167,7 +176,7 @@ function relevanceMeter(p) {
 // Relevance (admins only) as a chip above the title: hi = highlight, lo = low (the card is dimmed), mid = the rest
 const LOW_RELEVANCE = 3;
 function relevanceChip(p, level) {
-  if (!viewer.admin || p.relevance === null || p.relevance === undefined) return "";
+  if (!viewer.relevance || p.relevance === null || p.relevance === undefined) return "";
   const filled = Math.round(p.relevance / 2);
   const dots = Array.from({ length: 5 }, (_, i) => `<i class="${i < filled ? "on" : ""}"></i>`).join("");
   return `<span class="rel-chip ${level}" title="Relevance ${p.relevance} of 10" aria-label="Relevance ${p.relevance} of 10">${dots}<b>${p.relevance}</b></span>`;
@@ -268,9 +277,9 @@ function detailsBlock(p, entry) {
 // A paper card. opts: {showField: field name to show (no heading above), library: true}
 export function card(p, state, day, opts = {}) {
   const entry = state.entry;
-  const highlighted = viewer.admin && day && (p.relevance ?? 0) >= day.highlight_threshold;
+  const highlighted = viewer.relevance && day && (p.relevance ?? 0) >= day.highlight_threshold;
   const oneLiner = (opts.library && entry?.fulltext?.one_liner) || p.one_liner;
-  const low = viewer.admin && day && p.relevance !== null && p.relevance !== undefined && !highlighted && p.relevance <= LOW_RELEVANCE;
+  const low = viewer.relevance && day && p.relevance !== null && p.relevance !== undefined && !highlighted && p.relevance <= LOW_RELEVANCE;
   const level = highlighted ? "hi" : low ? "lo" : "mid";
   return [
     `<article class="paper${highlighted ? " highlighted" : ""}${low ? " low" : ""}" data-key="${e(p.doi_key)}"${opts.library ? ' data-library="1"' : ""}>`,
@@ -406,8 +415,16 @@ export function calendar(month, days, selected, today, ran = new Set(), firstDay
 // ---------- Pages ----------
 
 // Papers of a day grouped by field: [{id, name, fav, papers}], favourite fields first
-export function groupPapers(papers, fieldList) {
+// `filter.sort`: "relevance" (admins with relevance shown) or "date"; `filter.group` "none": one list, no headings
+export function groupPapers(papers, fieldList, filter = {}) {
   const fieldNames = new Map(fieldList.map((f) => [f.id, f.name]));
+  const byRelevance = viewer.relevance && filter.sort !== "date";
+  if (filter.group === "none") {
+    const all = [...papers].sort(byRelevance
+      ? (a, b) => (b.relevance ?? 0) - (a.relevance ?? 0) || (b.published_date || "").localeCompare(a.published_date || "")
+      : (a, b) => (b.published_date || "").localeCompare(a.published_date || ""));
+    return all.length ? [{ id: "all", name: "", fav: false, papers: all }] : [];
+  }
   const groups = new Map();
   for (const p of papers) {
     const f = p.field || "other";
@@ -417,7 +434,7 @@ export function groupPapers(papers, fieldList) {
   // Admins: most relevant first; others: newest publication first
   const byDate = (a, b) => (b.published_date || "").localeCompare(a.published_date || "");
   for (const list of groups.values()) {
-    list.sort(viewer.admin ? (a, b) => (b.relevance ?? 0) - (a.relevance ?? 0) || byDate(a, b) : byDate);
+    list.sort(byRelevance ? (a, b) => (b.relevance ?? 0) - (a.relevance ?? 0) || byDate(a, b) : byDate);
   }
   const usual = [...fieldList.map((f) => f.id).filter((f) => groups.has(f)),
     ...[...groups.keys()].filter((f) => !fieldNames.has(f))];
@@ -434,16 +451,41 @@ export function sideToc(groups) {
   )).join("") + "</ul>";
 }
 
-// A day: count, Cards/Compact switch, the fields (on narrow screens), groups with sticky headings
-export function dayPage(day, papers, fieldList, stateOf, compact = false) {
-  const groups = groupPapers(papers, fieldList);
+// The papers of a day that pass the "only" filter: all, highlights (relevance shown) or unread
+export function filterPapers(day, papers, stateOf, only) {
+  const threshold = day.highlight_threshold ?? 7;
+  if (only === "highlights" && viewer.relevance) return papers.filter((p) => (p.relevance ?? 0) >= threshold);
+  if (only === "unread") return papers.filter((p) => stateOf(p.doi_key).entry?.status !== "read");
+  return papers;
+}
+
+// One-tap filters above a day's papers: show (all / highlights / unread), sort, group by field or not
+function filterBar(f) {
+  const only = (value, label) => `<button type="button" data-act="day-only" data-only="${value}"`
+    + ` class="${f.only === value ? "on" : ""}" aria-pressed="${f.only === value}">${label}</button>`;
+  const toggle = (act, label) => `<button type="button" class="chip-toggle" data-act="${act}">${label}</button>`;
+  return '<div class="filter-bar" role="toolbar" aria-label="Filter and sort the papers">'
+    + `<span class="seg" role="group" aria-label="Show">${only("all", "All")}`
+    + `${viewer.relevance ? only("highlights", "Highlights") : ""}${only("unread", "Unread")}</span>`
+    + (viewer.relevance ? toggle("day-sort", f.sort === "date" ? "Sort: Newest" : "Sort: Relevance") : "")
+    + toggle("day-group", f.group === "none" ? "Flat list" : "By field")
+    + "</div>";
+}
+
+// A day: count, Cards/Compact switch, filters, the fields (on narrow screens), groups with sticky headings.
+// `papers`: all of the day's papers (for the filter bar and counts); `filter`: {only, sort, group}
+export function dayPage(day, allPapers, fieldList, stateOf, compact = false, filter = { only: "all", sort: "relevance", group: "field" }) {
+  const papers = filterPapers(day, allPapers, stateOf, filter.only);
+  const groups = groupPapers(papers, fieldList, filter);
   const fieldNames = new Map(fieldList.map((f) => [f.id, f.name]));
-  const toc = groups.map((g) => (
+  const flat = filter.group === "none";
+  const toc = flat ? "" : groups.map((g) => (
     `<li><a href="#f-${e(g.id)}" data-jump="f-${e(g.id)}">${g.fav ? "★ " : ""}${e(g.name)}<span class="n">${g.papers.length}</span></a></li>`
   )).join("");
   const sections = groups.map((g) => (
-    `<section class="group${g.fav ? " fav" : ""}" id="f-${e(g.id)}"><h2>${g.fav ? '<span class="star" aria-label="Favourite field">★</span>' : ""}`
-    + `${e(g.name)}<span class="n">${g.papers.length}</span></h2>`
+    `<section class="group${g.fav ? " fav" : ""}${flat ? " flat" : ""}" id="f-${e(g.id)}">`
+    + (flat ? "" : `<h2>${g.fav ? '<span class="star" aria-label="Favourite field">★</span>' : ""}`
+      + `${e(g.name)}<span class="n">${g.papers.length}</span></h2>`)
     + (compact
       ? `<div class="compact-list">${g.papers.map((p) => compactRow(p, stateOf(p.doi_key))).join("")}</div>`
       : g.papers.map((p) => dayCard(p, day, fieldNames, stateOf(p.doi_key))).join(""))
@@ -455,12 +497,15 @@ export function dayPage(day, papers, fieldList, stateOf, compact = false) {
   const mode = (value, label, icon) => `<button type="button" data-act="view-mode" data-mode="${value}"`
     + ` class="${(value === "compact") === compact ? "on" : ""}" aria-pressed="${(value === "compact") === compact}" aria-label="${label}" title="${label}">${icon}</button>`;
   return '<header class="page-head day-head">'
-    + `<p class="sub">${plural(day.paper_count ?? papers.length, "paper")}`
-    + (viewer.admin ? ` · ${plural(day.highlight_count ?? 0, "highlight")}` : "") + "</p>"
+    + `<p class="sub">${papers.length === allPapers.length ? plural(day.paper_count ?? allPapers.length, "paper") : `${papers.length} of ${plural(allPapers.length, "paper")}`}`
+    + (viewer.relevance ? ` · ${plural(day.highlight_count ?? 0, "highlight")}` : "") + "</p>"
     + `<span class="seg view-mode" role="group" aria-label="View">${mode("cards", "Cards", ICONS.cards)}${mode("compact", "Compact", ICONS.list)}</span>`
     + "</header>"
+    + filterBar(filter)
     + (toc ? `<ul class="toc day-toc">${toc}</ul>` : "")
-    + (sections || '<p class="empty">No new papers.</p>') + foot;
+    + (sections || (allPapers.length
+      ? '<p class="empty">No papers match.</p><button type="button" class="btn wide" data-act="day-only" data-only="all">Show all</button>'
+      : '<p class="empty">No new papers.</p>')) + foot;
 }
 
 export function libraryPage(groups, counts) {
@@ -597,7 +642,10 @@ export function settingsMenu(m) {
   return '<section class="settings">'
     + '<p class="group-label">Reading</p><div class="inset">'
     + row("journals", "My journals", v.journals) + row("fields", "Favourite fields", v.fields)
-    + row("language", "Translation language", v.language) + "</div>"
+    + row("language", "Translation language", v.language)
+    + (m.admin ? `<label class="row switch-row"><span>Show relevance</span><input type="checkbox" class="switch" data-act="show-relevance"${m.relevance ? " checked" : ""}></label>` : "")
+    + "</div>"
+    + (m.admin ? '<p class="hint">Relevance scores, highlights, dimming and relevance sorting. Saved on this device only.</p>' : "")
     + '<p class="group-label">Notifications</p><div class="inset">' + row("notifications", "Notifications", v.notifications) + "</div>"
     + (m.admin ? '<p class="group-label">Administration</p><div class="inset">'
       + row("digest", "Daily digest time", v.digest) + row("members", "Members", v.members)
@@ -639,7 +687,7 @@ export function settingsSection(id) {
 // ---------- Browse ----------
 
 // Search box and filters (rendered once; the list below is redrawn as you type)
-export function browseBar(meta, journals, browse) {
+export function browseBar(meta, journals, browse, recents = []) {
   const option = (value, label, selected) => `<option value="${e(value)}"${selected ? " selected" : ""}>${e(label)}</option>`;
   return '<div class="browse-bar">'
     + `<label class="search">${ICONS.search}<input type="search" name="q" value="${e(browse.q)}"`
@@ -653,7 +701,27 @@ export function browseBar(meta, journals, browse) {
     + `<span class="select"><select name="field" aria-label="Field">${option("", "All fields", !browse.field)}`
     + (meta.fields || []).map((f) => option(f.id, f.name, browse.field === f.id)).join("")
     + `</select>${ICONS.chevronDown}</span>`
-    + "</div></div>";
+    + "</div>"
+    + '<div class="filters">'
+    + `<span class="select"><select name="period" aria-label="Period">${PERIODS.map(([v, label]) => option(v, label, String(browse.period || "") === v)).join("")}`
+    + `</select>${ICONS.chevronDown}</span>`
+    + (viewer.relevance
+      ? `<span class="select"><select name="minrel" aria-label="Relevance">${option("", "Any relevance", !browse.minrel)}`
+        + `${option("highlights", "Highlights only", browse.minrel === "highlights")}${option("5", "Relevance 5+", browse.minrel === "5")}`
+        + `</select>${ICONS.chevronDown}</span>` : "")
+    + "</div>"
+    + `<div id="recent-searches">${recentSearches(recents, browse.q)}</div>`
+    + "</div>";
+}
+
+const PERIODS = [["", "Any time"], ["7", "Last 7 days"], ["30", "Last 30 days"], ["90", "Last 90 days"]];
+
+// Chips with the last searches (shown while the search box is empty)
+export function recentSearches(recents, q) {
+  if (!recents.length || (q || "").trim()) return "";
+  return '<div class="recent" aria-label="Recent searches"><span class="recent-label">Recent</span>'
+    + recents.map((r) => `<button type="button" class="chip-toggle" data-recent="${e(r)}">${e(r)}</button>`).join("")
+    + '<button type="button" class="chip-toggle quiet" data-act="recent-clear" aria-label="Clear recent searches">Clear</button></div>';
 }
 
 // No search and no filters: journals with their paper counts
@@ -668,17 +736,18 @@ export function journalList(journals) {
 }
 
 // Search results: one row per paper; `isSaved(key)` gives the saved mark
-export function resultRows(entries, total, threshold, isSaved, more) {
+export function resultRows(entries, total, threshold, isSaved, more, words = []) {
   if (!total) return '<p class="empty">No matching papers.</p>';
   const rows = entries.map((x) => {
-    const hl = viewer.admin && (x.relevance ?? 0) >= threshold;
+    const hl = viewer.relevance && (x.relevance ?? 0) >= threshold;
     const meta = [x.journal_abbr, x.published_date, viewer.fieldNames?.get(x.field) || "",
-      viewer.admin && x.relevance !== null && x.relevance !== undefined ? `Relevance ${x.relevance}` : ""]
+      viewer.relevance && x.relevance !== null && x.relevance !== undefined ? `Relevance ${x.relevance}` : ""]
       .filter(Boolean).join(" · ");
     return `<li><a class="row-btn" href="#/paper/${e(x.doi_key)}" data-key="${e(x.doi_key)}">`
       + '<span class="row-main">'
-      + `<span class="row-title serif">${e(x.title)}</span>`
-      + `<span class="row-meta">${hl ? '<i class="dot hl" aria-label="Highlight"></i>' : ""}${e(meta)}</span>`
+      + `<span class="row-title serif">${marked(x.title, words)}</span>`
+      + `<span class="row-meta">${hl ? '<i class="dot hl" aria-label="Highlight"></i>' : ""}${marked(meta, words)}</span>`
+      + (words.length && x.one_liner ? `<span class="row-snip"${lang(x.one_liner)}>${marked(x.one_liner, words)}</span>` : "")
       + "</span>"
       + `<span class="row-mark" data-mark="${e(x.doi_key)}">${isSaved(x.doi_key) ? ICONS.bookmarkFilled : ""}</span>`
       + "</a></li>";

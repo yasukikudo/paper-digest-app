@@ -21,6 +21,10 @@ const calSide = document.getElementById("cal-side");
 const sideNav = document.getElementById("side-nav");
 const sideToc = document.getElementById("side-toc-box");
 const VIEW_KEY = "paper-digest.day-view";   // "cards" or "compact", remembered on this device
+const FILTER_KEY = "paper-digest.day-filter";   // {sort, group} of a day's list, remembered on this device
+const RELEVANCE_KEY = "paper-digest.show-relevance";   // "off" hides relevance for the admin, on this device
+const RECENT_KEY = "paper-digest.recent-searches";   // the last searches in Browse, on this device
+const MAX_RECENT = 6;
 const backdrop = document.getElementById("sheet-backdrop");
 const EMAIL_KEY = "paper-digest.email";
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
@@ -42,7 +46,8 @@ const state = {
   page: null,                // "login" | "day" | "browse" | "paper" | "library" | "settings"
   day: null,                 // the date shown on the day page
   calMonth: null,            // "YYYY-MM" shown in the calendar
-  browse: { q: "", journal: "__mine__", field: "", limit: PAGE_SIZE, scroll: 0 },
+  browse: { q: "", journal: "__mine__", field: "", period: "", minrel: "", limit: PAGE_SIZE, scroll: 0 },
+  dayOnly: "all",            // the day list's "show" filter: all, highlights or unread (kept until the app is reloaded)
   librarySignature: "",
   navigation: 0,             // increases on every page change; stale loads are dropped
   previousHash: "",
@@ -220,7 +225,7 @@ async function startSession(user) {
     return;
   }
   state.me = me;
-  view.setViewer({ admin: me.role === "admin", canRequest: me.fulltext_allowed === true });
+  view.setViewer({ admin: me.role === "admin", relevance: showsRelevance(me), canRequest: me.fulltext_allowed === true });
   try {
     const [prefs, journals, languages] = await Promise.all([data.getPrefs(), data.listJournals(), data.getLanguages()]);
     state.prefs = prefs;
@@ -264,6 +269,17 @@ function applyPrefs() {
   viewCalendar();
 }
 
+// Relevance is for admins, and they can switch it off on a device (Settings → Show relevance)
+const showsRelevance = (me = state.me) => me?.role === "admin" && storageGet(RELEVANCE_KEY) !== "off";
+
+// How a day's list is sorted and grouped (remembered on this device)
+function dayFilter() {
+  let saved = {};
+  try { saved = JSON.parse(storageGet(FILTER_KEY) || "{}"); } catch { /* not valid */ }
+  return { only: state.dayOnly, sort: saved.sort === "date" ? "date" : "relevance", group: saved.group === "none" ? "none" : "field" };
+}
+const saveDayFilter = (change) => storageSet(FILTER_KEY, JSON.stringify({ ...dayFilter(), ...change, only: undefined }));
+
 function showNotRegistered() {
   state.page = "login";
   document.body.classList.add("signed-out");
@@ -289,7 +305,7 @@ function endSession() {
   state.summaries = new Map();
   state.appSettings = null;
   data.setUid(null);
-  view.setViewer({ admin: false, canRequest: false, remaining: null });
+  view.setViewer({ admin: false, relevance: false, canRequest: false, remaining: null });
   updateIndicators();
   closePanels();
   calSide.innerHTML = "";
@@ -355,7 +371,7 @@ function viewCalendar() {
       papers = counts.reduce((n, c) => n + c[0], 0);
       highlights = counts.reduce((n, c) => n + c[1], 0);
     }
-    if (papers > 0) days[date] = { papers, highlights: admin ? highlights : 0 };
+    if (papers > 0) days[date] = { papers, highlights: showsRelevance() ? highlights : 0 };
   }
   state.calendar.days = days;
   state.calendar.dates = Object.keys(days).sort();
@@ -436,8 +452,10 @@ function calendarHtml() {
 function renderDayView(bar = state.dayBar, keepScroll = false) {
   const { day, papers, fields } = state.dayView;
   const compact = storageGet(VIEW_KEY) === "compact";
-  show("today", bar, view.dayPage(day, papers, fields, stateOf, compact), { keepScroll });
-  sideToc.innerHTML = view.sideToc(view.groupPapers(papers, fields));
+  const filter = dayFilter();
+  show("today", bar, view.dayPage(day, papers, fields, stateOf, compact, filter), { keepScroll });
+  sideToc.innerHTML = filter.group === "none" ? ""
+    : view.sideToc(view.groupPapers(view.filterPapers(day, papers, stateOf, filter.only), fields, filter));
   markCurrentField();
 }
 
@@ -574,7 +592,7 @@ async function showBrowse() {
     const index = await ensureIndex();
     if (navigation !== state.navigation) return;
     show("browse", { title: "Browse" },
-      view.browseBar(index.meta, index.journals, state.browse) + '<div id="browse-list"></div>',
+      view.browseBar(index.meta, index.journals, state.browse, recentSearches()) + '<div id="browse-list"></div>',
       { scrollTo: 0 });
     if (!returning) state.browse.limit = PAGE_SIZE;
     renderBrowseList();
@@ -587,19 +605,39 @@ async function showBrowse() {
 }
 
 function browseMatches() {
-  const { q, journal, field } = state.browse;
+  const { q, journal, field, period, minrel } = state.browse;
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const mine = myAbbrs();
+  const since = period ? addDays(today(), -Number(period)) : "";
+  const threshold = state.index.meta.highlight_threshold ?? 7;
+  const least = !showsRelevance() || !minrel ? 0 : minrel === "highlights" ? threshold : Number(minrel);
   return state.index.entries.filter((x) => (!journal || (journal === "__mine__" ? mine.has(x.journal_abbr) : x.journal_abbr === journal))
     && (!field || (x.field || "other") === field)
+    && (!since || (x.published_date || (x.appeared_in || [""])[0] || "") >= since)
+    && (!least || (x.relevance ?? 0) >= least)
     && words.every((w) => x.hay.includes(w)));
+}
+
+// The last searches, newest first (this device)
+function recentSearches() {
+  try { return JSON.parse(storageGet(RECENT_KEY) || "[]").filter((r) => typeof r === "string"); } catch { return []; }
+}
+function rememberSearch(q) {
+  const text = q.trim().replace(/\s+/g, " ");
+  if (text.length < 2) return;
+  const list = [text, ...recentSearches().filter((r) => r.toLowerCase() !== text.toLowerCase())].slice(0, MAX_RECENT);
+  storageSet(RECENT_KEY, JSON.stringify(list));
+}
+function renderRecent() {
+  const box = document.getElementById("recent-searches");
+  if (box) box.innerHTML = view.recentSearches(recentSearches(), state.browse.q);
 }
 
 function renderBrowseList() {
   const list = document.getElementById("browse-list");
   if (!list || !state.index) return;
-  const { q, journal, field, limit } = state.browse;
-  if (!q.trim() && !field && (!journal || journal === "__mine__")) {
+  const { q, journal, field, limit, period, minrel } = state.browse;
+  if (!q.trim() && !field && !period && !(minrel && showsRelevance()) && (!journal || journal === "__mine__")) {
     const mine = myAbbrs();
     list.innerHTML = view.journalList(journal ? state.index.journals.filter((j) => mine.has(j.abbr)) : state.index.journals);
     return;
@@ -608,7 +646,7 @@ function renderBrowseList() {
   const shown = matches.slice(0, limit);
   const isSaved = (key) => Boolean(stateOf(key).entry?.saved);
   list.innerHTML = view.resultRows(shown, matches.length, state.index.meta.highlight_threshold ?? 7, isSaved,
-    Math.min(PAGE_SIZE, matches.length - shown.length));
+    Math.min(PAGE_SIZE, matches.length - shown.length), q.toLowerCase().split(/\s+/).filter(Boolean));
 }
 
 // Typing filters as you go (redrawn once per frame)
@@ -619,10 +657,11 @@ content.addEventListener("input", (ev) => {
   state.browse.limit = PAGE_SIZE;
   cancelAnimationFrame(browseFrame);
   browseFrame = requestAnimationFrame(renderBrowseList);
+  renderRecent();
 });
 
 content.addEventListener("change", (ev) => {
-  if (state.page !== "browse" || !["journal", "field"].includes(ev.target.name)) return;
+  if (state.page !== "browse" || !["journal", "field", "period", "minrel"].includes(ev.target.name)) return;
   state.browse[ev.target.name] = ev.target.value;
   state.browse.limit = PAGE_SIZE;
   renderBrowseList();
@@ -631,6 +670,25 @@ content.addEventListener("change", (ev) => {
 // The search box: Enter / Search closes the keyboard
 content.addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && ev.target.name === "q") ev.target.blur();
+});
+// A search is remembered when the box is left, or Enter is pressed
+content.addEventListener("focusout", (ev) => {
+  if (state.page === "browse" && ev.target.name === "q") { rememberSearch(ev.target.value); renderRecent(); }
+});
+content.addEventListener("click", (ev) => {
+  if (state.page !== "browse") return;
+  const recent = ev.target.closest("[data-recent]");
+  if (recent) {
+    state.browse.q = recent.dataset.recent;
+    state.browse.limit = PAGE_SIZE;
+    const box = content.querySelector('input[name="q"]');
+    if (box) box.value = state.browse.q;
+    renderBrowseList();
+    renderRecent();
+  } else if (ev.target.closest('[data-act="recent-clear"]')) {
+    storageSet(RECENT_KEY, "[]");
+    renderRecent();
+  }
 });
 
 // ---------- One paper (from Browse) ----------
@@ -965,6 +1023,17 @@ content.addEventListener("click", (ev) => {
     renderDayView(state.dayBar, true);
     return;
   }
+  const only = ev.target.closest('[data-act="day-only"]');
+  const sort = ev.target.closest('[data-act="day-sort"]');
+  const group = ev.target.closest('[data-act="day-group"]');
+  if ((only || sort || group) && state.dayView) {
+    if (only) state.dayOnly = only.dataset.only;
+    if (sort) saveDayFilter({ sort: dayFilter().sort === "date" ? "relevance" : "date" });
+    if (group) saveDayFilter({ group: dayFilter().group === "none" ? "field" : "none" });
+    renderDayView(state.dayBar);
+    content.scrollTop = 0;
+    return;
+  }
   const row = ev.target.closest("[data-expand]");
   if (row && state.dayView) {
     const p = state.papers.get(row.dataset.expand);
@@ -1055,7 +1124,7 @@ async function showSettings() {
   state.settingsSection = null;
   document.title = "Settings";
   const admin = state.me?.role === "admin";
-  const menu = (values) => view.settingsMenu({ email: state.user.email, admin, addJournals: canAddJournals(), values });
+  const menu = (values) => view.settingsMenu({ email: state.user.email, admin, relevance: showsRelevance(), addJournals: canAddJournals(), values });
   show("settings", { title: "Settings" }, menu({}));
   try {
     const chosen = state.prefs?.journals || [...state.journals.keys()];
@@ -1344,6 +1413,17 @@ async function renderJournals() {
     section.innerHTML = `<p class="msg">Could not load the journals. ${view.e(errorText(err))}</p>`;
   }
 }
+
+// Settings → Show relevance (admins; this device): hides relevance scores, highlights, dimming and relevance sorting
+content.addEventListener("change", (ev) => {
+  if (!ev.target.matches?.('[data-act="show-relevance"]') || state.me?.role !== "admin") return;
+  storageSet(RELEVANCE_KEY, ev.target.checked ? "on" : "off");
+  view.setViewer({ relevance: showsRelevance() });
+  state.index = null;   // Browse: its filters depend on it
+  if (state.calendar) updateIndicators();
+  viewCalendar();
+  toast(ev.target.checked ? "Relevance shown" : "Relevance hidden");
+});
 
 // Renaming a journal (the display name only; saved at once)
 content.addEventListener("change", async (ev) => {
