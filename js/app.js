@@ -85,9 +85,21 @@ function errorText(err) {
   if (code === "permission-denied" || code === "firestore/permission-denied") {
     return "Permission denied by the Firestore rules.";
   }
-  if (code === "unavailable") return "Offline or Firestore is unavailable. Try again.";
+  if (code === "unavailable" || code === "deadline-exceeded" || code === "auth/network-request-failed"
+    || !navigator.onLine) return "No connection, or the server is not reachable. Check the network and try again.";
   return err?.message || String(err);
 }
+
+// A slim notice while the device is offline; going back online retries a page that failed to load
+const netBanner = document.getElementById("net-banner");
+function showNetwork() { netBanner.hidden = navigator.onLine; }
+window.addEventListener("offline", showNetwork);
+window.addEventListener("online", () => {
+  showNetwork();
+  if (state.user && content.querySelector('[data-act="retry"]')) route();
+  else if (state.user) toast("Back online");
+});
+showNetwork();
 
 const today = () => new Date().toLocaleDateString("en-CA");   // YYYY-MM-DD on this device
 const addDays = (date, n) => { const d = new Date(`${date}T12:00:00`); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA"); };
@@ -169,8 +181,17 @@ function show(tab, bar, html, { keepScroll = false, scrollTo = 0 } = {}) {
   if (state.page !== "day") sideToc.innerHTML = "";
 }
 
+let loadingTimer;
 function showLoading(tab, bar) {
   show(tab, bar, view.skeleton());
+  // Still the grey placeholders after 8 seconds: say so, and offer another try
+  clearTimeout(loadingTimer);
+  loadingTimer = setTimeout(() => {
+    const sk = content.querySelector(".skeleton");
+    if (!sk || sk.nextElementSibling?.classList.contains("slow-note")) return;
+    sk.insertAdjacentHTML("afterend", '<p class="slow-note">Still loading… the connection may be slow. '
+      + '<button type="button" class="link-btn" data-act="retry">Try again</button></p>');
+  }, 8000);
 }
 
 // ---------- Sign-in ----------
@@ -394,7 +415,7 @@ async function showDay(date) {
     if (!cal.first || date > now) {   // nothing yet, or a day still to come
       state.day = date;
       renderSide();
-      show("today", { date }, `<p class="empty">${cal.first ? "This day has not come yet." : "No digest has run yet."}</p>`);
+      show("today", { date }, view.emptyState({ icon: view.ICONS.clock, title: cal.first ? "This day has not come yet" : "No digest has run yet" }));
       return;
     }
     state.day = date;
@@ -422,8 +443,11 @@ async function showDay(date) {
     const fields = day.fields?.length ? day.fields : DEFAULT_FIELDS;
     if (navigation !== state.navigation) return;
     if (!papers.length) {
-      show("today", bar, `<p class="empty">${all.length ? "No new papers from your journals on this day." : "No new papers on this day."}</p>`
-        + `<p class="empty-sub">${all.length ? `The digest found ${view.plural(all.length, "paper")} in other journals.` : "The digest ran and found nothing new in the journals."}</p>`);
+      show("today", bar, view.emptyState({
+        title: all.length ? "No new papers from your journals" : "No new papers on this day",
+        sub: all.length ? `The digest found ${view.plural(all.length, "paper")} in other journals.` : "The digest ran and found nothing new in the journals.",
+        action: all.length ? '<a class="btn" href="#/settings/journals">My journals</a>' : "",
+      }));
       markDaySeen(date);
       return;
     }
@@ -436,7 +460,7 @@ async function showDay(date) {
     markDaySeen(date);
   } catch (err) {
     if (navigation === state.navigation) {
-      show("today", { date: date || "" }, `<p class="empty">Could not load the digest. ${view.e(errorText(err))}</p>`);
+      show("today", { date: date || "" }, view.loadFailed("the digest", errorText(err)));
     }
   }
 }
@@ -599,7 +623,7 @@ async function showBrowse() {
     if (returning) content.scrollTop = state.browse.scroll;
   } catch (err) {
     if (navigation === state.navigation) {
-      show("browse", { title: "Browse" }, `<p class="empty">Could not load the paper index. ${view.e(errorText(err))}</p>`);
+      show("browse", { title: "Browse" }, view.loadFailed("the paper index", errorText(err)));
     }
   }
 }
@@ -646,7 +670,8 @@ function renderBrowseList() {
   const shown = matches.slice(0, limit);
   const isSaved = (key) => Boolean(stateOf(key).entry?.saved);
   list.innerHTML = view.resultRows(shown, matches.length, state.index.meta.highlight_threshold ?? 7, isSaved,
-    Math.min(PAGE_SIZE, matches.length - shown.length), q.toLowerCase().split(/\s+/).filter(Boolean));
+    Math.min(PAGE_SIZE, matches.length - shown.length), q.toLowerCase().split(/\s+/).filter(Boolean),
+    Boolean(q.trim() || field || period || minrel || (journal && journal !== "__mine__")));
 }
 
 // Typing filters as you go (redrawn once per frame)
@@ -714,7 +739,7 @@ async function showPaper(key) {
     document.title = paper.title || "Paper";
   } catch (err) {
     if (navigation === state.navigation) {
-      show("browse", bar, `<p class="empty">Could not load the paper. ${view.e(errorText(err))}</p>`);
+      show("browse", bar, view.loadFailed("the paper", errorText(err)));
     }
   }
 }
@@ -747,7 +772,7 @@ async function showLibrary() {
     }
   } catch (err) {
     if (navigation === state.navigation) {
-      show("library", { title: "Library" }, `<p class="empty">Could not load the library. ${view.e(errorText(err))}</p>`);
+      show("library", { title: "Library" }, view.loadFailed("the library", errorText(err)));
     }
   }
 }
@@ -877,15 +902,24 @@ function refreshCards() {
 // Library writes run in a transaction, so Firestore confirms them only after a round trip.
 // The change is shown at once and replaced by the stored document when the write finishes
 // (or undone if it fails).
-async function withOptimistic(key, change, write) {
+// The change shows at once; the card is marked "saving" until the server has it, and the confirmation
+// toast comes only then (a failed save is undone and reported, see act()). The button that changed pops.
+async function withOptimistic(key, change, write, done = "") {
   const current = state.optimistic.get(key) || state.library.get(key) || { notes: [] };
   state.optimistic.set(key, { ...current, ...change(current) });
   refreshCards();
+  const cards = [...content.querySelectorAll(`article.paper[data-key="${CSS.escape(key)}"]`)];
+  for (const card of cards) {
+    card.classList.add("saving");
+    card.querySelector('.actions .on[aria-pressed="true"]')?.classList.add("pop");
+  }
   try {
     await write();
+    if (done) toast(done);
   } finally {
     state.optimistic.delete(key);
     refreshCards();
+    for (const card of cards) card.classList.remove("saving");
   }
 }
 
@@ -896,17 +930,14 @@ async function act(button, card) {
   const what = button.dataset.act;
   try {
     if (what === "save") {
-      toast("Saved");
       await withOptimistic(key, (e) => ({ saved: true, saved_at: e.saved_at || today(), status: e.status || "to_read" }),
-        () => data.setSaved(paper, true));
+        () => data.setSaved(paper, true), "Saved");
     } else if (what === "unsave") {
-      toast("Removed from library");
-      await withOptimistic(key, () => ({ saved: false, saved_at: null }), () => data.setSaved(paper, false));
+      await withOptimistic(key, () => ({ saved: false, saved_at: null }), () => data.setSaved(paper, false), "Removed from library");
     } else if (what === "status") {
       const status = button.dataset.status;
-      toast(status === "read" ? "Marked as read" : "Marked as to read");
       await withOptimistic(key, (e) => ({ saved: true, saved_at: e.saved_at || today(), status }),
-        () => data.setStatus(paper, status));
+        () => data.setStatus(paper, status), status === "read" ? "Marked as read" : "Marked as to read");
     } else if (what === "note") {
       openNote(paper);
     } else if (what === "cancel-request") {
@@ -929,11 +960,23 @@ async function act(button, card) {
       }
     }
   } catch (err) {
-    toast(`Could not save: ${errorText(err)}`, "error");
+    toast(`Not saved, the change was undone. ${errorText(err)}`, "error");
   }
 }
 
 content.addEventListener("click", (ev) => {
+  if (ev.target.closest('[data-act="retry"]')) { route(); return; }
+  const author = ev.target.closest("[data-author-search]");
+  if (author) {   // an author's name in Details → Authors: search Browse for that name, in every journal
+    state.browse = { ...state.browse, q: author.dataset.authorSearch, journal: "", field: "", period: "", minrel: "", limit: PAGE_SIZE, scroll: 0 };
+    location.hash = "#/browse";
+    return;
+  }
+  if (ev.target.closest('[data-act="browse-clear"]')) {
+    state.browse = { ...state.browse, q: "", journal: "__mine__", field: "", period: "", minrel: "", limit: PAGE_SIZE };
+    showBrowse();
+    return;
+  }
   const jump = ev.target.closest("[data-jump]");
   if (jump) {
     ev.preventDefault();

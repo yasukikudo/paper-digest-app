@@ -92,7 +92,9 @@ export function authorsBody(p, cache) {
     const info = cache.get(a.author_id || "") || {};
     const orcid = a.orcid || info.orcid;
     const shown = displayName(a.name);
-    const name = orcid ? `<a href="${e(orcid)}" target="_blank" rel="noopener">${e(shown)}</a>` : e(shown);
+    // Tapping the name searches Browse for that author's papers in the digest
+    const name = `<button type="button" class="author-link" data-author-search="${e(shown)}" title="Find this author's papers in the digest">${e(shown)}</button>`
+      + (orcid ? ` <a class="orcid" href="${e(orcid)}" target="_blank" rel="noopener" title="ORCID profile">ORCID</a>` : "");
     const aff = [a.institution, a.country].filter(Boolean).join(", ") || "No affiliation listed";
     const career = careerText(info);
     return `<li><span class="author-name">${name}</span> <span class="aff"${lang(aff)}>${e(aff)}</span>`
@@ -205,7 +207,21 @@ export const ICONS = {
   cards: svg('<rect x="4" y="4.5" width="16" height="6" rx="1.5"/><rect x="4" y="13.5" width="16" height="6" rx="1.5"/>'),
   list: svg('<path d="M5 6.5h14M5 12h14M5 17.5h14"/>'),
   close: svg('<path d="M7 7l10 10M17 7L7 17"/>'),
+  inbox: svg('<path d="M4 13l2.2-6.5A2 2 0 0 1 8.1 5h7.8a2 2 0 0 1 1.9 1.5L20 13v4.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><path d="M4 13h4.5l1 2h5l1-2H20"/>'),
+  offline: svg('<path d="M4 4l16 16M8.7 8.7A8.5 8.5 0 0 0 3 11M16.8 12.2A8.5 8.5 0 0 1 21 11M12 6.5a12 12 0 0 1 3.5.5M9 15a4.5 4.5 0 0 1 3-1.2M12 18.2v.1"/>'),
 };
+
+// An empty or failed page: an icon, a title, a short line and an optional button/link (HTML)
+export function emptyState({ icon = ICONS.inbox, title, sub = "", action = "" }) {
+  return `<div class="empty-state">${icon}<p class="empty-title">${e(title)}</p>`
+    + (sub ? `<p class="empty-sub">${e(sub)}</p>` : "") + (action ? `<div class="empty-action">${action}</div>` : "") + "</div>";
+}
+
+// A page that could not be loaded, with a Try again button (the app reloads the page)
+export const loadFailed = (what, message) => emptyState({
+  icon: ICONS.offline, title: `Could not load ${what}`, sub: message,
+  action: '<button type="button" class="btn primary" data-act="retry">Try again</button>',
+});
 
 // The row of actions under a paper: save, status, note, request; links on the right
 export function actions(p, entry, request, busy) {
@@ -361,12 +377,16 @@ export function appBar({ title, date, prev, next, back, today }) {
 // A day with no digest record: today before the morning run, or a day GitHub did not run the job
 export function noDigest(isToday, admin) {
   if (isToday) {
-    return '<p class="empty">Today\'s digest has not run yet.</p>'
-      + (admin ? '<p class="empty-sub">If it is past the digest time, start it now.</p>'
-        + '<p class="empty-action"><a class="btn" href="#/settings/run">Run now</a></p>' : "");
+    return emptyState({
+      icon: ICONS.clock, title: "Today's digest has not run yet",
+      sub: admin ? "If it is past the digest time, start it now." : "It appears here once the morning run has finished.",
+      action: admin ? '<a class="btn primary" href="#/settings/run">Run now</a>' : "",
+    });
   }
-  return '<p class="empty">No digest was run for this day.</p>'
-    + (admin ? '<p class="empty-sub">Papers that appeared then were collected by the next run.</p>' : "");
+  return emptyState({
+    icon: ICONS.clock, title: "No digest was run for this day",
+    sub: admin ? "Papers that appeared then were collected by the next run." : "",
+  });
 }
 
 // ---------- Calendar ----------
@@ -504,8 +524,9 @@ export function dayPage(day, allPapers, fieldList, stateOf, compact = false, fil
     + filterBar(filter)
     + (toc ? `<ul class="toc day-toc">${toc}</ul>` : "")
     + (sections || (allPapers.length
-      ? '<p class="empty">No papers match.</p><button type="button" class="btn wide" data-act="day-only" data-only="all">Show all</button>'
-      : '<p class="empty">No new papers.</p>')) + foot;
+      ? emptyState({ title: "No papers match", sub: "Try another filter.",
+        action: '<button type="button" class="btn" data-act="day-only" data-only="all">Show all</button>' })
+      : emptyState({ title: "No new papers" }))) + foot;
 }
 
 export function libraryPage(groups, counts) {
@@ -736,8 +757,12 @@ export function journalList(journals) {
 }
 
 // Search results: one row per paper; `isSaved(key)` gives the saved mark
-export function resultRows(entries, total, threshold, isSaved, more, words = []) {
-  if (!total) return '<p class="empty">No matching papers.</p>';
+export function resultRows(entries, total, threshold, isSaved, more, words = [], filtered = false) {
+  if (!total) {
+    return emptyState({ icon: ICONS.search, title: "No matching papers",
+      sub: filtered ? "Try fewer words or loosen a filter." : "Try different words.",
+      action: filtered ? '<button type="button" class="btn" data-act="browse-clear">Clear search and filters</button>' : "" });
+  }
   const rows = entries.map((x) => {
     const hl = viewer.relevance && (x.relevance ?? 0) >= threshold;
     const meta = [x.journal_abbr, x.published_date, viewer.fieldNames?.get(x.field) || "",
