@@ -164,8 +164,13 @@ export async function getPrefs() {
   return snap.exists() ? snap.data() : null;
 }
 
-export function savePrefs({ journals, fields, language, onboarded }) {
-  return setDoc(mine("settings", "prefs"), { journals, fields, language, onboarded, updated_at: isoNow() });
+// `priority_journals` (IDs of journals shown first on a day) is written only when there are some
+export function savePrefs({ journals, fields, language, onboarded, priority_journals }) {
+  return setDoc(mine("settings", "prefs"), {
+    journals, fields, language, onboarded,
+    ...(priority_journals?.length ? { priority_journals } : {}),
+    updated_at: isoNow(),
+  });
 }
 
 // ---------- Shared settings (settings/app; admins write) ----------

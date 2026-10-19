@@ -283,6 +283,7 @@ async function startSession(user) {
 function applyPrefs() {
   view.setViewer({
     favFields: new Set(state.prefs?.fields || []),
+    priority: new Set((state.prefs?.priority_journals || []).map((id) => state.journals.get(id)?.abbr).filter(Boolean)),
     language: state.prefs?.language && state.languages[state.prefs.language] ? state.prefs.language : null,
     languageNames: state.languages,
     fieldNames: new Map(DEFAULT_FIELDS.map((f) => [f.id, f.name])),
@@ -1177,6 +1178,7 @@ async function showSettings() {
       journals: `${chosen.filter((id) => state.journals.has(id)).length} of ${state.journals.size}`,
       fields: favs.length ? (favs.length > 1 ? `${favs.length} fields` : favs[0]) : "None",
       language: state.languages[state.prefs?.language] || "None",
+      priority: (n => (n ? view.plural(n, "journal") : "None"))((state.prefs?.priority_journals || []).filter((id) => state.journals.has(id)).length),
       notifications: NOTIFY_LABELS[await push.status()] || "",
       journalList: `${state.journals.size}`,
     };
@@ -1220,7 +1222,7 @@ async function showSettingsSection(id) {
   show("settings", { title: view.SETTINGS_PAGES[id], back: "Settings" }, view.settingsSection(id));
   try {
     if (id === "pin") bindPinForm();
-    else if (["journals", "fields", "language"].includes(id)) renderPrefs();
+    else if (["journals", "fields", "language", "priority"].includes(id)) renderPrefs();
     else if (id === "notifications") {
       state.notifyChoices = await data.getNotifyChoices();
       if (navigation === state.navigation) await renderNotify();
@@ -1348,6 +1350,7 @@ function prefsOptions(chosen) {
   return {
     journals, chosenJournals: new Set(chosen.journals || []), fields: DEFAULT_FIELDS,
     chosenFields: new Set(chosen.fields || []), languages: state.languages, language: chosen.language || "",
+    chosenPriority: new Set(chosen.priority_journals || []),
   };
 }
 
@@ -1358,6 +1361,7 @@ function readPrefs(form) {
   return {
     journals: has("journal") ? checked("journal") : (state.prefs?.journals || [...state.journals.keys()]),
     fields: has("field") ? checked("field") : (state.prefs?.fields || []),
+    priority_journals: has("priority") ? checked("priority") : (state.prefs?.priority_journals || []),
     language: has("language") ? (form.elements.language.value || null) : (state.prefs?.language ?? null),
   };
 }
@@ -1394,7 +1398,7 @@ content.addEventListener("click", async (ev) => {
 
 function renderPrefs() {
   const section = content.querySelector("#prefs-section");
-  const part = ["journals", "fields", "language"].includes(state.settingsSection) ? state.settingsSection : null;
+  const part = ["journals", "fields", "language", "priority"].includes(state.settingsSection) ? state.settingsSection : null;
   const saved = state.prefs || { journals: [...state.journals.keys()] };
   if (section) section.innerHTML = view.prefsSections(prefsOptions(saved), part);
 }

@@ -818,3 +818,6 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: in
 }
 .author-link:hover { text-decoration: underline; }
 .authors .orcid { font-size: .7rem; margin-left: .35rem; color: var(--muted); border: .5px solid var(--line); border-radius: 999px; padding: 0 .45em; }
+
+/* A priority journal's paper: its star in the line above the title */
+.prio { color: var(--link); font-weight: 600; }

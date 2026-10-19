@@ -13,7 +13,7 @@ import {
 // this month (null = no limit).
 // Also the user's favourite fields (listed first, papers marked), their translation language
 // and the names of the offered languages.
-let viewer = { admin: false, relevance: false, canRequest: false, remaining: null, favFields: new Set(), language: null, languageNames: {} };
+let viewer = { admin: false, relevance: false, priority: new Set(), canRequest: false, remaining: null, favFields: new Set(), language: null, languageNames: {} };
 export const setViewer = (v) => { viewer = { ...viewer, ...v }; };
 export const languageName = (code) => viewer.languageNames[code] || LANGUAGE_NAMES[code] || (code === "en" ? "English" : code);
 
@@ -151,6 +151,7 @@ export function cardMeta(p, entry, opts = {}) {
   else if (p.fulltext_access === "auto") items.push(["OA", false]);
   else if (p.fulltext_access === "manual") items.push(["OA · PDF needed", false]);
   if (opts.library && entry?.saved_at) items.push([`Saved ${e(entry.saved_at)}`, false]);
+  if (viewer.priority.has(p.journal_abbr)) items.push([`<span class="prio" title="One of your priority journals">★ ${e(p.journal_abbr)}</span>`, true]);
   for (const flag of dataFlags(p)) items.push([`<span class="flag" title="${e(flag.hint)}">${e(flag.label)}</span>`, true]);
   return items.map(([text, html]) => (html ? text : e(text))).join('<span class="sep">·</span>');
 }
@@ -436,13 +437,15 @@ export function calendar(month, days, selected, today, ran = new Set(), firstDay
 
 // Papers of a day grouped by field: [{id, name, fav, papers}], favourite fields first
 // `filter.sort`: "relevance" (admins with relevance shown) or "date"; `filter.group` "none": one list, no headings
+// Papers of the user's priority journals come first in every list, then by relevance or date
 export function groupPapers(papers, fieldList, filter = {}) {
   const fieldNames = new Map(fieldList.map((f) => [f.id, f.name]));
   const byRelevance = viewer.relevance && filter.sort !== "date";
+  const prio = (p) => (viewer.priority.has(p.journal_abbr) ? 1 : 0);
   if (filter.group === "none") {
     const all = [...papers].sort(byRelevance
-      ? (a, b) => (b.relevance ?? 0) - (a.relevance ?? 0) || (b.published_date || "").localeCompare(a.published_date || "")
-      : (a, b) => (b.published_date || "").localeCompare(a.published_date || ""));
+      ? (a, b) => prio(b) - prio(a) || (b.relevance ?? 0) - (a.relevance ?? 0) || (b.published_date || "").localeCompare(a.published_date || "")
+      : (a, b) => prio(b) - prio(a) || (b.published_date || "").localeCompare(a.published_date || ""));
     return all.length ? [{ id: "all", name: "", fav: false, papers: all }] : [];
   }
   const groups = new Map();
@@ -454,7 +457,8 @@ export function groupPapers(papers, fieldList, filter = {}) {
   // Admins: most relevant first; others: newest publication first
   const byDate = (a, b) => (b.published_date || "").localeCompare(a.published_date || "");
   for (const list of groups.values()) {
-    list.sort(byRelevance ? (a, b) => (b.relevance ?? 0) - (a.relevance ?? 0) || byDate(a, b) : byDate);
+    list.sort(byRelevance ? (a, b) => prio(b) - prio(a) || (b.relevance ?? 0) - (a.relevance ?? 0) || byDate(a, b)
+      : (a, b) => prio(b) - prio(a) || byDate(a, b));
   }
   const usual = [...fieldList.map((f) => f.id).filter((f) => groups.has(f)),
     ...[...groups.keys()].filter((f) => !fieldNames.has(f))];
@@ -664,6 +668,7 @@ export function settingsMenu(m) {
     + '<p class="group-label">Reading</p><div class="inset">'
     + row("journals", "My journals", v.journals) + row("fields", "Favourite fields", v.fields)
     + row("language", "Translation language", v.language)
+    + row("priority", "Priority journals", v.priority)
     + (m.admin ? `<label class="row switch-row"><span>Show relevance</span><input type="checkbox" class="switch" data-act="show-relevance"${m.relevance ? " checked" : ""}></label>` : "")
     + "</div>"
     + (m.admin ? '<p class="hint">Relevance scores, highlights, dimming and relevance sorting. Saved on this device only.</p>' : "")
@@ -683,7 +688,7 @@ export function settingsMenu(m) {
 
 // Titles of the settings pages
 export const SETTINGS_PAGES = {
-  journals: "My journals", fields: "Favourite fields", language: "Translation language",
+  journals: "My journals", fields: "Favourite fields", language: "Translation language", priority: "Priority journals",
   notifications: "Notifications", digest: "Daily digest time", members: "Members",
   "journal-list": "Journals", languages: "Languages", costs: "Costs", run: "Run now", pin: "Change PIN",
 };
@@ -698,7 +703,7 @@ export function settingsSection(id) {
       + pin("again", "New PIN again", "new-password") + "</div>"
       + '<p class="msg" role="status"></p><button type="submit" class="btn primary wide">Change PIN</button></form></section>';
   }
-  const ids = { journals: "prefs-section", fields: "prefs-section", language: "prefs-section",
+  const ids = { journals: "prefs-section", fields: "prefs-section", language: "prefs-section", priority: "prefs-section",
     notifications: "notify-section", digest: "digest-section", members: "members-section",
     "journal-list": "journals-section", languages: "languages-section", costs: "costs-section",
     run: "run-section" };
@@ -803,11 +808,12 @@ export const journalFilter = () => '<label class="search journal-filter">' + ICO
   + '<p class="hint filter-empty" hidden>No journal matches.</p>';
 const searchText = (j) => e(`${j.abbr} ${j.name}`.toLowerCase());
 
-function journalChecks(o) {
-  return o.journals.map((j) => (
+// `name`: the checkbox name ("journal" = followed, "priority" = shown first); `list`, `chosen`: what to show and tick
+function journalChecks(o, name = "journal", list = o.journals, chosen = o.chosenJournals) {
+  return list.map((j) => (
     `<label class="row check-row${j.active ? "" : " paused"}" data-search="${searchText(j)}"><span><span class="j-abbr">${e(j.abbr)}</span> ${e(j.name)}`
     + `${j.active ? "" : ' <span class="tag">paused</span>'}</span>`
-    + `<input type="checkbox" class="switch" name="journal" value="${e(j.id)}"${o.chosenJournals.has(j.id) ? " checked" : ""}></label>`
+    + `<input type="checkbox" class="switch" name="${name}" value="${e(j.id)}"${chosen.has(j.id) ? " checked" : ""}></label>`
   )).join("");
 }
 
@@ -826,15 +832,21 @@ function languageSelect(o) {
     + `</select>${ICONS.chevronDown}</span></label>`;
 }
 
-// `part`: "journals", "fields" or "language" (a settings page), or all three (first-run screen)
+// `part`: "journals", "fields", "language" or "priority" (a settings page), or the first three (first-run screen)
 export function prefsSections(o, part = null) {
   const show = (name) => !part || part === name;
+  const followed = o.journals.filter((j) => o.chosenJournals.has(j.id));
   return '<form id="prefs-form">'
     + (show("journals") ? (part ? "" : '<p class="group-label">My journals</p>')
       + (o.journals.length ? journalFilter() : "")
       + `<div class="inset">${journalChecks(o) || '<p class="row"><span>No journals yet.</span></p>'}</div>`
       + '<p class="hint">Today, the calendar, Browse, notifications and the badge show only these journals. '
       + "Paused journals are not collected for now.</p>" : "")
+    + (part === "priority"
+      ? (followed.length ? journalFilter() : "")
+        + `<div class="inset">${journalChecks(o, "priority", followed, o.chosenPriority) || '<p class="row"><span>You follow no journals yet.</span></p>'}</div>`
+        + '<p class="hint">Papers from these journals are listed first on each day (within each field), marked with a star. '
+        + "Only the journals you follow are listed. Fields you marked as favourite still come first.</p>" : "")
     + (show("fields") ? (part ? "" : '<p class="group-label">Favourite fields</p>')
       + `<div class="inset">${fieldChecks(o)}</div>`
       + '<p class="hint">Listed first on Today and marked ★.</p>' : "")
