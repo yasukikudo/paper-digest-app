@@ -209,6 +209,8 @@ export const ICONS = {
   cards: svg('<rect x="4" y="4.5" width="16" height="6" rx="1.5"/><rect x="4" y="13.5" width="16" height="6" rx="1.5"/>'),
   list: svg('<path d="M5 6.5h14M5 12h14M5 17.5h14"/>'),
   close: svg('<path d="M7 7l10 10M17 7L7 17"/>'),
+  sort: svg('<path d="M8 5v14M8 5L5.2 7.8M8 5l2.8 2.8M16 19V5M16 19l-2.8-2.8M16 19l2.8-2.8"/>'),
+  stack: svg('<path d="M12 4l8 4-8 4-8-4zM4 12l8 4 8-4M4 16l8 4 8-4"/>'),
   inbox: svg('<path d="M4 13l2.2-6.5A2 2 0 0 1 8.1 5h7.8a2 2 0 0 1 1.9 1.5L20 13v4.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><path d="M4 13h4.5l1 2h5l1-2H20"/>'),
   offline: svg('<path d="M4 4l16 16M8.7 8.7A8.5 8.5 0 0 0 3 11M16.8 12.2A8.5 8.5 0 0 1 21 11M12 6.5a12 12 0 0 1 3.5.5M9 15a4.5 4.5 0 0 1 3-1.2M12 18.2v.1"/>'),
 };
@@ -484,17 +486,21 @@ export function filterPapers(day, papers, stateOf, only) {
   return papers;
 }
 
-// One-tap filters above a day's papers: show (all / highlights / unread), sort, group by field or not
+// One-tap filter above a day's papers: all / highlights / unread, as one full-width segmented control
 function filterBar(f) {
   const only = (value, label) => `<button type="button" data-act="day-only" data-only="${value}"`
     + ` class="${f.only === value ? "on" : ""}" aria-pressed="${f.only === value}">${label}</button>`;
-  const toggle = (act, label) => `<button type="button" class="chip-toggle" data-act="${act}">${label}</button>`;
-  return '<div class="filter-bar" role="toolbar" aria-label="Filter and sort the papers">'
-    + `<span class="seg" role="group" aria-label="Show">${only("all", "All")}`
-    + `${viewer.relevance ? only("highlights", "Highlights") : ""}${only("unread", "Unread")}</span>`
-    + (viewer.relevance ? toggle("day-sort", f.sort === "date" ? "Sort: Newest" : "Sort: Relevance") : "")
-    + toggle("day-group", f.group === "none" ? "Flat list" : "By field")
-    + "</div>";
+  return '<div class="filter-bar"><span class="seg" role="group" aria-label="Show">'
+    + `${only("all", "All")}${viewer.relevance ? only("highlights", "Highlights") : ""}${only("unread", "Unread")}</span></div>`;
+}
+
+// Sort and grouping: two small icon buttons beside the Cards / Compact switch (on = the default: most
+// relevant first, grouped by field)
+function dayTools(f) {
+  const tool = (act, icon, on, label) => `<button type="button" class="tool-btn" data-act="${act}" aria-pressed="${on}"`
+    + ` aria-label="${label}" title="${label}">${icon}</button>`;
+  return (viewer.relevance ? tool("day-sort", ICONS.sort, f.sort !== "date", f.sort === "date" ? "Sorted newest first (tap for most relevant first)" : "Sorted most relevant first (tap for newest first)") : "")
+    + tool("day-group", ICONS.stack, f.group !== "none", f.group === "none" ? "One list (tap to group by field)" : "Grouped by field (tap for one list)");
 }
 
 // A day: count, Cards/Compact switch, filters, the fields (on narrow screens), groups with sticky headings.
@@ -524,7 +530,8 @@ export function dayPage(day, allPapers, fieldList, stateOf, compact = false, fil
   return '<header class="page-head day-head">'
     + `<p class="sub">${papers.length === allPapers.length ? plural(day.paper_count ?? allPapers.length, "paper") : `${papers.length} of ${plural(allPapers.length, "paper")}`}`
     + (viewer.relevance ? ` · ${plural(day.highlight_count ?? 0, "highlight")}` : "") + "</p>"
-    + `<span class="seg view-mode" role="group" aria-label="View">${mode("cards", "Cards", ICONS.cards)}${mode("compact", "Compact", ICONS.list)}</span>`
+    + `<span class="head-tools">${dayTools(filter)}`
+    + `<span class="seg view-mode" role="group" aria-label="View">${mode("cards", "Cards", ICONS.cards)}${mode("compact", "Compact", ICONS.list)}</span></span>`
     + "</header>"
     + filterBar(filter)
     + (toc ? `<ul class="toc day-toc">${toc}</ul>` : "")
@@ -776,13 +783,14 @@ export function resultRows(entries, total, threshold, isSaved, more, words = [],
   }
   const rows = entries.map((x) => {
     const hl = viewer.relevance && (x.relevance ?? 0) >= threshold;
+    // Each part stays on one line (a part is never split in the middle, e.g. "Relevance" / "5")
     const meta = [x.journal_abbr, x.published_date, viewer.fieldNames?.get(x.field) || "",
       viewer.relevance && x.relevance !== null && x.relevance !== undefined ? `Relevance ${x.relevance}` : ""]
-      .filter(Boolean).join(" · ");
+      .filter(Boolean).map((part) => `<span class="nw">${marked(part, words)}</span>`).join(" · ");
     return `<li><a class="row-btn" href="#/paper/${e(x.doi_key)}" data-key="${e(x.doi_key)}">`
       + '<span class="row-main">'
       + `<span class="row-title serif">${marked(x.title, words)}</span>`
-      + `<span class="row-meta">${hl ? '<i class="dot hl" aria-label="Highlight"></i>' : ""}${marked(meta, words)}</span>`
+      + `<span class="row-meta">${hl ? '<i class="dot hl" aria-label="Highlight"></i>' : ""}${meta}</span>`
       + (words.length && x.one_liner ? `<span class="row-snip"${lang(x.one_liner)}>${marked(x.one_liner, words)}</span>` : "")
       + "</span>"
       + `<span class="row-mark" data-mark="${e(x.doi_key)}">${isSaved(x.doi_key) ? ICONS.bookmarkFilled : ""}</span>`

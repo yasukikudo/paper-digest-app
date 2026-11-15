@@ -1090,6 +1090,8 @@ content.addEventListener("click", (ev) => {
     if (group) saveDayFilter({ group: dayFilter().group === "none" ? "field" : "none" });
     renderDayView(state.dayBar);
     content.scrollTop = 0;
+    if (sort) toast(dayFilter().sort === "date" ? "Newest first" : "Most relevant first");
+    if (group) toast(dayFilter().group === "none" ? "One list" : "Grouped by field");
     return;
   }
   const row = ev.target.closest("[data-expand]");
