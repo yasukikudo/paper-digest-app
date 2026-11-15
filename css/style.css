@@ -38,8 +38,10 @@
   color-scheme: light dark;
 }
 
+/* Dark: by the device's setting (Auto), or by Settings → Appearance (data-theme on <html>). The same values
+   are written twice because a media query and an attribute cannot share one rule. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #121417;
     --card: #1c1f24;      /* a lighter surface instead of a shadow */
     --bar: rgba(22, 24, 28, .86);
@@ -57,8 +59,32 @@
     --shadow: 0 0 0 .5px #2c3036;   /* a hairline edge instead of a shadow (not "none": it is used inside shadow lists) */
     --skeleton: #23272d;
     --rel-off: #3a3f46;
+    color-scheme: dark;
   }
+  :root:not([data-theme="light"]) body { -webkit-font-smoothing: antialiased; }
 }
+:root[data-theme="dark"] {
+  --bg: #121417;
+  --card: #1c1f24;      /* a lighter surface instead of a shadow */
+  --bar: rgba(22, 24, 28, .86);
+  --text: #e7e5e0;
+  --muted: #a7adb5;     /* 7.5:1 on the cards */
+  --line: #2c3036;
+  --chip: #262a30;
+  --link: #8fb8ee;
+  --accent: #e3a664;
+  --ok: #82c79d;
+  --danger: #f0938c;
+  --primary: #e7e5e0;
+  --on-primary: #16181c;
+  --seg-on: #3a3f46;
+  --shadow: 0 0 0 .5px #2c3036;   /* a hairline edge instead of a shadow (not "none": it is used inside shadow lists) */
+  --skeleton: #23272d;
+  --rel-off: #3a3f46;
+  color-scheme: dark;
+}
+:root[data-theme="dark"] body { -webkit-font-smoothing: antialiased; }
+:root[data-theme="light"] { color-scheme: light; }
 
 /* ---------- Shell: fixed bars, one scrolling area ---------- */
 html { font-size: 17px; -webkit-text-size-adjust: 100%; height: 100%; }
@@ -68,7 +94,12 @@ body {
   font-family: var(--font-ui); line-height: 1.6;
   -webkit-tap-highlight-color: transparent;
 }
-:lang(ja) { font-family: var(--font-ja); line-height: 1.8; }
+:lang(ja) {
+  font-family: var(--font-ja); line-height: 1.8;
+  line-break: strict;            /* no small kana or long-vowel marks at the start of a line */
+  text-autospace: normal;        /* a thin space between Japanese and Latin letters or digits (where supported) */
+  hanging-punctuation: allow-end;
+}
 a { color: var(--link); text-decoration: none; }
 p { margin: 0; }
 
@@ -244,7 +275,7 @@ button { font: inherit; color: inherit; }
   font-size: .6rem; font-weight: 600; line-height: 16px; text-align: center; color: var(--ok);
 }
 .btn.ghost { background: transparent; color: var(--muted); }
-.btn.ghost:hover { color: var(--text); background: var(--chip); }
+@media (hover: hover) { .btn.ghost:hover { color: var(--text); background: var(--chip); } }
 
 /* Segmented control (To read | Read) */
 .seg { display: inline-flex; padding: 2px; border-radius: 999px; background: var(--chip); }
@@ -366,7 +397,7 @@ p.more { color: var(--muted); font-size: .76rem; padding-top: .5rem; }
   padding: .75rem 16px; border: 0; background: none; color: var(--text); text-align: left;
   font: inherit; cursor: pointer;
 }
-.compact-row:hover { background: color-mix(in srgb, var(--chip) 55%, transparent); }
+@media (hover: hover) { .compact-row:hover { background: color-mix(in srgb, var(--chip) 55%, transparent); } }
 .compact-row:active { background: var(--chip); }
 .c-title { font-family: var(--font-serif); font-size: 1rem; font-weight: 600; line-height: 1.35; }
 .c-meta { display: flex; align-items: center; gap: .45rem; min-width: 0; color: var(--muted); font-size: .76rem; }
@@ -492,7 +523,7 @@ button.date-pick { border: 0; background: none; color: var(--text); font: inheri
 }
 .cal-day.blank { visibility: hidden; }
 .cal-day.has { color: var(--text); opacity: 1; cursor: pointer; font-weight: 500; }
-.cal-day.has:hover { background: var(--chip); }
+@media (hover: hover) { .cal-day.has:hover { background: var(--chip); } }
 .cal-day.has:active { transform: scale(.94); }
 .cal-day .dot { position: absolute; bottom: 3px; }
 .cal-day.today > span:first-child {
@@ -717,7 +748,8 @@ a.menu-row:active { background: var(--chip); }
 .cost-chart .val { fill: var(--link); opacity: .75; }
 .cost-chart .est { fill: var(--link); opacity: .3; }
 .cost-chart .bar { cursor: pointer; outline: none; }
-.cost-chart .bar:hover .hit, .cost-chart .bar:focus-visible .hit { fill: var(--chip); }
+.cost-chart .bar:focus-visible .hit { fill: var(--chip); }
+@media (hover: hover) { .cost-chart .bar:hover .hit { fill: var(--chip); } }
 .cost-chart .bar.on .hit { fill: color-mix(in srgb, var(--link) 10%, transparent); }
 .cost-chart .bar.on .val { opacity: 1; }
 .chart-labels { position: relative; height: 1.3rem; margin-top: 4px; }
@@ -816,8 +848,28 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: in
 .author-link {
   background: none; border: 0; padding: 0; font: inherit; font-weight: 600; color: var(--link); text-align: left; cursor: pointer;
 }
-.author-link:hover { text-decoration: underline; }
+@media (hover: hover) { .author-link:hover { text-decoration: underline; } }
 .authors .orcid { font-size: .7rem; margin-left: .35rem; color: var(--muted); border: .5px solid var(--line); border-radius: 999px; padding: 0 .45em; }
 
 /* A priority journal's paper: its star in the line above the title */
 .prio { color: var(--link); font-weight: 600; }
+
+/* "AI" label: text written by Claude (translations, full-text summaries) */
+.ai-tag {
+  display: inline-block; margin-left: .35em; padding: 0 .4em; border-radius: 4px; vertical-align: .08em;
+  box-shadow: inset 0 0 0 1px var(--line); color: var(--muted);
+  font-size: .62rem; font-weight: 600; letter-spacing: .05em; line-height: 1.5;
+}
+.pane-note { margin-top: .75rem; color: var(--muted); font-size: .74rem; }
+
+/* Settings → Appearance: a three-way switch */
+.row .seg { flex: none; }
+.row .seg button { min-height: 30px; }
+
+/* Costs: the Claude API key's expiry */
+.key-card { padding: .85rem 16px; }
+.key-card .key-line { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.key-card .key-days { font-variant-numeric: tabular-nums; font-weight: 600; }
+.key-card .key-days.soon { color: var(--accent); }
+.key-card .key-days.over { color: var(--danger); }
+.key-card .key-note { margin-top: .35rem; color: var(--muted); font-size: .76rem; }

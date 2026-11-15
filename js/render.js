@@ -110,8 +110,9 @@ export function authorsBody(p, cache) {
 export function fulltextBody(entry) {
   const ft = entry?.fulltext;
   if (!ft) return "";
-  const meta = [SOURCE_LABELS[ft.source] || ft.source, ft.language ? languageName(ft.language) : "",
-    (ft.created_at || "").slice(0, 10)].filter(Boolean).join(" · ");
+  // Summaries made here (from open access or an own PDF) are written by Claude; imported ones are not claimed as AI
+  const meta = [ft.source === "import" ? "" : "AI summary", SOURCE_LABELS[ft.source] || ft.source,
+    ft.language ? languageName(ft.language) : "", (ft.created_at || "").slice(0, 10)].filter(Boolean).join(" · ");
   let body;
   if (ft.sections) {
     body = '<dl class="sections">' + SECTION_LABELS.filter(([key]) => ft.sections[key])
@@ -173,7 +174,7 @@ function relevanceMeter(p) {
   if (!viewer.relevance || p.relevance === null || p.relevance === undefined) return "";
   const filled = Math.round(p.relevance / 2);
   const dots = Array.from({ length: 5 }, (_, i) => `<i class="${i < filled ? "on" : ""}"></i>`).join("");
-  return `<span class="rel" title="Relevance ${p.relevance} of 10" aria-label="Relevance ${p.relevance} of 10">${dots}<b>${p.relevance}</b></span>`;
+  return `<span class="rel" title="Relevance ${p.relevance} of 10 (an AI estimate)" aria-label="Relevance ${p.relevance} of 10, an AI estimate">${dots}<b>${p.relevance}</b></span>`;
 }
 
 // Relevance (admins only) as a chip above the title: hi = highlight, lo = low (the card is dimmed), mid = the rest
@@ -182,7 +183,7 @@ function relevanceChip(p, level) {
   if (!viewer.relevance || p.relevance === null || p.relevance === undefined) return "";
   const filled = Math.round(p.relevance / 2);
   const dots = Array.from({ length: 5 }, (_, i) => `<i class="${i < filled ? "on" : ""}"></i>`).join("");
-  return `<span class="rel-chip ${level}" title="Relevance ${p.relevance} of 10" aria-label="Relevance ${p.relevance} of 10">${dots}<b>${p.relevance}</b></span>`;
+  return `<span class="rel-chip ${level}" title="Relevance ${p.relevance} of 10 (an AI estimate)" aria-label="Relevance ${p.relevance} of 10, an AI estimate">${dots}<b>${p.relevance}</b></span>`;
 }
 
 // ---------- Icons (inline SVG, stroke-based; colored by currentColor) ----------
@@ -270,7 +271,7 @@ export function actions(p, entry, request, busy) {
 function detailsBlock(p, entry) {
   const translation = translationOf(p);
   const tabs = [];
-  if (translation) tabs.push(["tr", "Translation"]);
+  if (translation) tabs.push(["tr", 'Translation<span class="ai-tag" title="Written by AI">AI</span>']);
   if (p.abstract) tabs.push(["ab", "Abstract"]);
   if ((p.authorships || []).length) tabs.push(["au", "Authors"]);
   tabs.push(["ft", "Full text"]);
@@ -284,7 +285,7 @@ function detailsBlock(p, entry) {
   return '<details class="more">'
     + `<summary><span>Details<span class="meta">${e(hints.join(" · "))}</span></span></summary>`
     + `<div class="tabs" role="tablist">${tabs.map(tab).join("")}</div>`
-    + (translation ? pane("tr", `<p lang="${e(viewer.language)}">${e(translation)}</p>`) : "")
+    + (translation ? pane("tr", `<p lang="${e(viewer.language)}">${e(translation)}</p><p class="pane-note">AI translation of the abstract; check the original when it matters.</p>`) : "")
     + (p.abstract ? pane("ab", `<p class="abstract-en">${e(p.abstract)}</p>`) : "")
     + ((p.authorships || []).length ? pane("au", '<p class="more">Loading…</p>', " data-authors") : "")
     + pane("ft", fulltextBody(entry), ' data-slot="fulltext"')
@@ -672,6 +673,11 @@ export function settingsMenu(m) {
     + (m.admin ? `<label class="row switch-row"><span>Show relevance</span><input type="checkbox" class="switch" data-act="show-relevance"${m.relevance ? " checked" : ""}></label>` : "")
     + "</div>"
     + (m.admin ? '<p class="hint">Relevance scores, highlights, dimming and relevance sorting. Saved on this device only.</p>' : "")
+    + '<p class="group-label">Appearance</p><div class="inset"><div class="row"><span>Theme</span>'
+    + '<span class="seg" role="group" aria-label="Theme">'
+    + [["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]].map(([v, label]) => (
+      `<button type="button" data-act="theme" data-theme-set="${v}" aria-pressed="${(m.theme || "auto") === v}">${label}</button>`)).join("")
+    + '</span></div></div><p class="hint">Auto follows the device. Saved on this device only.</p>'
     + '<p class="group-label">Notifications</p><div class="inset">' + row("notifications", "Notifications", v.notifications) + "</div>"
     + (m.admin ? '<p class="group-label">Administration</p><div class="inset">'
       + row("digest", "Daily digest time", v.digest) + row("members", "Members", v.members)

@@ -106,6 +106,20 @@ const addDays = (date, n) => { const d = new Date(`${date}T12:00:00`); d.setDate
 const fresh = (loaded) => loaded && Date.now() - loaded.loadedAt < STALE_MS;
 const motion = () => (reducedMotion.matches ? "auto" : "smooth");
 
+// Appearance (Settings): "auto" follows the device, "light" / "dark" force it. Saved on this device.
+const THEME_KEY = "paper-digest.theme";
+const themeMode = () => { const v = storage.get(THEME_KEY); return v === "light" || v === "dark" ? v : "auto"; };
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "auto") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", mode);
+  const color = { light: "#f4f2ed", dark: "#121417" };   // the status bar colour follows the forced theme
+  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
+    meta.dataset.auto = meta.dataset.auto || meta.content;
+    meta.content = mode === "auto" ? meta.dataset.auto : color[mode];
+  }
+}
+applyTheme(themeMode());
+
 // Abbreviations of the journals this user follows (every journal if they have not chosen)
 function myAbbrs() {
   const chosen = state.prefs?.journals;
@@ -1168,7 +1182,7 @@ async function showSettings() {
   state.settingsSection = null;
   document.title = "Settings";
   const admin = state.me?.role === "admin";
-  const menu = (values) => view.settingsMenu({ email: state.user.email, admin, relevance: showsRelevance(), addJournals: canAddJournals(), values });
+  const menu = (values) => view.settingsMenu({ email: state.user.email, admin, relevance: showsRelevance(), theme: themeMode(), addJournals: canAddJournals(), values });
   show("settings", { title: "Settings" }, menu({}));
   try {
     const chosen = state.prefs?.journals || [...state.journals.keys()];
@@ -1461,6 +1475,16 @@ async function renderJournals() {
   }
 }
 
+// Settings → Appearance: Auto / Light / Dark
+content.addEventListener("click", (ev) => {
+  const button = ev.target.closest('[data-act="theme"]');
+  if (!button || state.page !== "settings") return;
+  const mode = button.dataset.themeSet;
+  storage.set(THEME_KEY, mode);
+  applyTheme(mode);
+  for (const b of content.querySelectorAll('[data-act="theme"]')) b.setAttribute("aria-pressed", String(b === button));
+});
+
 // Settings → Show relevance (admins; this device): hides relevance scores, highlights, dimming and relevance sorting
 content.addEventListener("change", (ev) => {
   if (!ev.target.matches?.('[data-act="show-relevance"]') || state.me?.role !== "admin") return;
@@ -1616,13 +1640,14 @@ content.addEventListener("submit", async (ev) => {
 async function loadCosts(navigation) {
   if (!state.appSettings) state.appSettings = (await data.getAppSettings()) || DEFAULT_DIGEST;
   const today = costView.todayIn(state.appSettings.timezone);
-  const [docs, settings, people] = await Promise.all([
-    data.listCosts(costView.firstNeeded(today)), data.getCostSettings(), data.listUsers()]);
+  const [docs, settings, people, key] = await Promise.all([
+    data.listCosts(costView.firstNeeded(today)), data.getCostSettings(), data.listUsers(),
+    data.getApiKeyInfo().catch(() => null)]);
   if (navigation !== state.navigation) return;
   const period = state.costs?.period || "day";
   state.costs = {
     docs, today, period, selected: costView.keyOf(period, today),
-    budget: settings?.monthly_budget_usd ?? null,
+    budget: settings?.monthly_budget_usd ?? null, keyExpires: key?.expires || null,
     names: new Map([...people].map(([uid, u]) => [uid, u.display_name || uid])),
   };
   renderCosts();

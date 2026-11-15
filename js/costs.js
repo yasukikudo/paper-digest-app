@@ -152,7 +152,21 @@ function budgetBlock(c) {
     + `${meter}<p class="msg" role="status"></p><button type="submit" class="btn wide">Save budget</button></form>`;
 }
 
-// c: {docs: Map, today, period, selected, budget, names: Map uid → display name}
+// The Claude API key's expiry: the date and the days left (accent within 14 days, red once expired)
+function keyBlock(c) {
+  if (!c.keyExpires) return "";
+  const left = Math.round((toDate(c.keyExpires) - toDate(c.today)) / 86_400_000);
+  const state = left < 0 ? "over" : left <= 14 ? "soon" : "";
+  const days = left < 0 ? `expired ${-left} ${-left === 1 ? "day" : "days"} ago`
+    : left === 0 ? "expires today" : `${left} ${left === 1 ? "day" : "days"} left`;
+  const note = left < 0 ? "Papers are not screened until a new key is set (GitHub Secret and .env; see docs/handoff.md)."
+    : left <= 14 ? "Make a new key in the Console and replace it in the GitHub Secret and .env before then." : "";
+  return '<p class="group-label">Claude API key</p>'
+    + `<div class="inset key-card"><div class="key-line"><span>Expires ${e(c.keyExpires)}</span>`
+    + `<span class="key-days ${state}">${days}</span></div>${note ? `<p class="key-note">${e(note)}</p>` : ""}</div>`;
+}
+
+// c: {docs: Map, today, period, selected, budget, keyExpires, names: Map uid → display name}
 export function costsPage(c) {
   const tot = (period) => aggregate(c.docs, period, keyOf(period, c.today)).total;
   const card = (title, v) => `<div class="cost-card"><span>${title}</span><b>${usd(v)}</b></div>`;
@@ -162,6 +176,7 @@ export function costsPage(c) {
     + `<div class="chart-head"><span class="seg" role="group" aria-label="Chart by">${seg}</span></div>`
     + `<div class="chart-box">${chart(c)}</div>`
     + breakdown(c)
+    + keyBlock(c)
     + budgetBlock(c)
     + '<p class="hint fine">Amounts are estimates from token counts and list prices. Check the exact charges in the Anthropic Console.</p>';
 }

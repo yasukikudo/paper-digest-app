@@ -198,6 +198,12 @@ export async function getCostSettings() {
   return snap.exists() ? snap.data() : null;
 }
 
+// costs/api_key: {expires: "YYYY-MM-DD"}, the Claude API key's expiry copied by the hourly job (null if none)
+export async function getApiKeyInfo() {
+  const snap = await getDoc(doc(db, "costs", "api_key"));
+  return snap.exists() ? snap.data() : null;
+}
+
 export const saveBudget = (usd) => setDoc(doc(db, "settings", "costs"), { monthly_budget_usd: usd, updated_at: isoNow() });
 
 // ---------- This user's settings: notifications and what has been seen ----------
