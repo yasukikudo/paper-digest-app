@@ -202,6 +202,7 @@ export const ICONS = {
   chevronLeft: svg('<path d="M14.5 5.5L8 12l6.5 6.5"/>'),
   chevronRight: svg('<path d="M9.5 5.5L16 12l-6.5 6.5"/>'),
   chevronDown: svg('<path d="M6.5 9.5L12 15l5.5-5.5"/>'),
+  chevronUp: svg('<path d="M6.5 14.5L12 9l5.5 5.5"/>'),
   search: svg('<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5l5 5"/>'),
   external: svg('<path d="M13.5 4.5h6v6M19.5 4.5l-8 8"/><path d="M17.5 13.5v5a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18.5V8.5A1.5 1.5 0 0 1 6 7h5"/>'),
   unlock: svg('<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 6.8-1.2"/><circle cx="12" cy="15.5" r="1.2" class="fill"/>'),
@@ -303,7 +304,9 @@ export function card(p, state, day, opts = {}) {
   const level = highlighted ? "hi" : low ? "lo" : "mid";
   return [
     `<article class="paper${highlighted ? " highlighted" : ""}${low ? " low" : ""}" data-key="${e(p.doi_key)}"${opts.library ? ' data-library="1"' : ""}>`,
-    `<div class="card-top">${relevanceChip(p, level)}<p class="card-meta" data-slot="meta">${cardMeta(p, entry, opts)}</p></div>`,
+    `<div class="card-top">${relevanceChip(p, level)}<p class="card-meta" data-slot="meta">${cardMeta(p, entry, opts)}</p>`
+    + (opts.collapsible ? `<button type="button" class="tool-btn collapse-btn" data-act="collapse-card" aria-label="Collapse" title="Collapse">${ICONS.chevronUp}</button>` : "")
+    + "</div>",
     `<h3 class="title"><a href="${e(p.url || "")}" target="_blank" rel="noopener">${e(p.title)}</a></h3>`,
     byline(p, opts.showField || ""),
     `<div data-slot="oneliner">${oneLiner ? para(oneLiner, "oneliner") : ""}</div>`,
@@ -315,8 +318,9 @@ export function card(p, state, day, opts = {}) {
   ].join("");
 }
 
-export function dayCard(p, day, fieldNames, state, showField = false) {
-  return card(p, state, day, { showField: showField ? (fieldNames.get(p.field) || p.field) : "" });
+// `collapsible`: a card opened from the compact list gets a button that turns it back into its row
+export function dayCard(p, day, fieldNames, state, showField = false, collapsible = false) {
+  return card(p, state, day, { showField: showField ? (fieldNames.get(p.field) || p.field) : "", collapsible });
 }
 
 export function libraryCard(p, entry, state) {

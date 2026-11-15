@@ -1099,7 +1099,17 @@ content.addEventListener("click", (ev) => {
     const p = state.papers.get(row.dataset.expand);
     if (!p) return;
     const fieldNames = new Map(state.dayView.fields.map((f) => [f.id, f.name]));
-    row.outerHTML = view.dayCard(p, state.dayView.day, fieldNames, stateOf(p.doi_key));
+    row.outerHTML = view.dayCard(p, state.dayView.day, fieldNames, stateOf(p.doi_key), false, true);
+    return;
+  }
+  // The button on a card opened from the compact list: back to its row, kept in view
+  const collapse = ev.target.closest('[data-act="collapse-card"]');
+  if (collapse && state.dayView) {
+    const card = collapse.closest("article.paper[data-key]");
+    const p = card && state.papers.get(card.dataset.key);
+    if (!p) return;
+    card.outerHTML = view.compactRow(p, stateOf(p.doi_key));
+    content.querySelector(`[data-expand="${CSS.escape(p.doi_key)}"]`)?.scrollIntoView({ block: "nearest" });
   }
 });
 

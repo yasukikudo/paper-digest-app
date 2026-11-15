@@ -9,8 +9,6 @@
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
   --font-ja: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", system-ui, sans-serif;
   --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-  /* Japanese reading text (translations, full-text summaries): a Mincho that pairs with the serif English */
-  --font-ja-serif: "Hiragino Mincho ProN", "Hiragino Mincho Pro", "Yu Mincho", "YuMincho", "Noto Serif JP", serif;
 
   --bg: #f4f2ed;          /* page background, slightly warm */
   --card: #fffefb;        /* cards float on the background */
@@ -897,10 +895,9 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: in
 .key-card .key-days.over { color: var(--danger); }
 .key-card .key-note { margin-top: .35rem; color: var(--muted); font-size: var(--fs-sm); }
 
-/* Japanese reading text in a Mincho (the interface and the one-liners stay in the Gothic) */
-.pane p:lang(ja), .sections dd:lang(ja), .ft-oneliner:lang(ja) { font-family: var(--font-ja-serif); }
-.pane[data-pane="tr"] p:lang(ja) { font-size: var(--fs-lg); line-height: 1.95; letter-spacing: .01em; }
-.sections dd:lang(ja) { line-height: 1.95; letter-spacing: .01em; }
+/* Japanese reading text (translations, full-text summaries) stays in the Gothic, a little airier than the interface */
+.pane[data-pane="tr"] p:lang(ja) { font-size: var(--fs-base); line-height: 1.9; }
+.sections dd:lang(ja) { line-height: 1.9; }
 
 /* Line length: about 70 letters at most for the text of a card, whatever the width of the screen */
 .paper .oneliner, .paper .reason { max-width: 34rem; }
@@ -917,3 +914,6 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: in
 /* Small refinements: aligned digits in counts, careful kerning in serif headings */
 .n, .count, .list-head { font-variant-numeric: tabular-nums; }
 .title, .row-title.serif, .abstract-en { text-rendering: optimizeLegibility; font-kerning: normal; hyphens: manual; }
+
+/* The close button of a card opened from the compact list: at the right of the first line */
+.collapse-btn { margin-left: auto; margin-top: -4px; margin-right: -6px; }
