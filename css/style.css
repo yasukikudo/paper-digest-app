@@ -24,7 +24,7 @@
   --primary: #1f2328;     /* filled buttons */
   --on-primary: #fbfaf7;
   --seg-on: #fffefb;
-  --shadow: 0 1px 2px rgba(31, 35, 40, .05), 0 3px 12px rgba(31, 35, 40, .05);
+  --shadow: 0 0 0 .5px rgba(31, 35, 40, .08), 0 1px 2px rgba(31, 35, 40, .05), 0 3px 12px rgba(31, 35, 40, .05);
   --skeleton: #e9e6df;
   --rel-off: #dcd7cc;     /* empty relevance dots */
 
@@ -209,7 +209,7 @@ body.signed-out .content { padding-top: env(safe-area-inset-top); padding-bottom
 /* ---------- Paper cards ---------- */
 .paper {
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
-  padding: 16px 16px 0; margin-bottom: 12px; overflow: hidden;
+  padding: 16px 16px 0; margin-bottom: 16px; overflow: hidden;
 }
 .paper.highlighted {
   box-shadow: var(--shadow), inset 3px 0 0 var(--accent);
@@ -316,7 +316,10 @@ button { font: inherit; color: inherit; }
 .req-error .icon { width: 16px; height: 16px; margin-top: .15rem; }
 
 /* ---------- "Details": translation, abstract, authors, full text as tabs (full card width) ---------- */
-details.more { margin: 0 -16px; border-top: .5px solid var(--line); }
+/* "Details" is the card's footer: a faint tint, not a rule. A full-width rule looked like the line
+   between two cards (and, in the compact list, like the line between two rows), so "Details" seemed to
+   belong to the card below; the tint, also behind the opened panel, keeps it with its own card. */
+details.more { margin: 0 -16px; background: color-mix(in srgb, var(--chip) 42%, transparent); }
 summary {
   display: flex; align-items: center; gap: .5rem;
   min-height: var(--tap); padding: 0 16px; cursor: pointer; list-style: none;
