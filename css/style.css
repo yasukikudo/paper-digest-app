@@ -923,3 +923,40 @@ mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: in
 
 /* The close button of a card opened from the compact list: at the right of the first line */
 .collapse-btn { margin-left: auto; margin-top: -4px; margin-right: -6px; }
+
+/* ---------- What can be pressed: a little easier to tell apart, and a clear response ---------- */
+/* At rest: the quiet icon buttons on a card (article page, open access, collapse, cancel) get the same faint
+   chip as the other controls, and the "Details" arrow is a little darker, so they read as buttons */
+.paper .btn.ghost, .paper .collapse-btn {
+  background: color-mix(in srgb, var(--chip) 55%, transparent);
+  color: color-mix(in srgb, var(--muted) 55%, var(--text));
+}
+summary::after { border-color: color-mix(in srgb, var(--muted) 50%, var(--text)); }
+
+/* Pressed (touch) */
+.title a:active { opacity: .65; }
+details.more > summary:active { background: color-mix(in srgb, var(--chip) 90%, transparent); }
+.tabs [role="tab"]:active { color: var(--text); }
+
+/* Pointer over it (mouse, trackpad) */
+@media (hover: hover) {
+  .btn:not(.primary):not(.link):not(.on):not(.ghost):not(.request):not(:disabled):hover { background: color-mix(in srgb, var(--text) 8%, var(--chip)); }
+  .btn.on:not(:disabled):hover { background: color-mix(in srgb, var(--ok) 24%, transparent); }
+  .btn.primary:not(:disabled):hover { opacity: .88; }
+  .btn.request:not(:disabled):hover { background: color-mix(in srgb, var(--ok) 20%, transparent); }
+  .paper .btn.ghost:hover, .paper .collapse-btn:hover { background: var(--chip); color: var(--text); }
+  .tool-btn:hover { background: var(--chip); color: var(--text); }
+  .seg button:not(.on):not([aria-pressed="true"]):hover { color: var(--text); }
+  .title a:hover, .paper.low .title a:hover {
+    color: var(--text); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .2em;
+    text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  }
+  details.more > summary:hover { background: color-mix(in srgb, var(--chip) 70%, transparent); }
+  summary:hover::after { border-color: var(--text); }
+  .tabs [role="tab"]:not([aria-selected="true"]):hover { color: var(--text); }
+}
+
+/* Keyboard focus: one ring for all of them */
+.btn:focus-visible, .seg button:focus-visible, .tool-btn:focus-visible, .tabs [role="tab"]:focus-visible,
+.title a:focus-visible, .author-link:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+summary:focus-visible, .compact-row:focus-visible { outline: 2px solid var(--link); outline-offset: -2px; }
