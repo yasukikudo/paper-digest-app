@@ -403,8 +403,11 @@ p.more { color: var(--muted); font-size: var(--fs-sm); padding-top: .5rem; }
 .compact-list {
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; margin-bottom: 12px;
 }
-.compact-list > .paper { border-radius: 0; box-shadow: none; margin: 0; }
 .compact-list > * + * { border-top: .5px solid var(--line); }
+/* A card opened in the list is lifted out of it (margin, edge), so where it ends is clear and its
+   "Details" is not taken for part of the row below */
+.compact-list > .paper { margin: 8px; border-radius: 12px; border-top: 0; }
+.compact-list > .paper + * { border-top: 0; }
 .compact-row {
   display: flex; flex-direction: column; gap: .2rem; width: 100%; box-sizing: border-box;
   padding: .75rem 16px; border: 0; background: none; color: var(--text); text-align: left;
